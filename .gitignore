@@ -1,6 +1,7 @@
 # Maven target directory
 /target/
 
+.claude
 # Compiled class files
 *.class
 
@@ -35,11 +36,8 @@ bin/
 .Spotlight-V100
 .Trashes
 
-# Maven Wrapper
-.mvn/
-!/.mvn/wrapper/maven-wrapper.jar
-mvnw
-mvnw.cmd
+# Maven Wrapper (keep wrapper jar ignored - it's downloaded automatically)
+.mvn/wrapper/maven-wrapper.jar
 
 # Environment files
 .env
