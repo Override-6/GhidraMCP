@@ -318,7 +318,7 @@ public class SearchHandler {
             }
             if (same_field_accumulation != 0) {
                 sb.append("  <same field as above ")
-                        .append(same_field_accumulation)
+                        .append(same_field_accumulation - 1)
                         .append(" times>\n");
                 same_field_accumulation = 0;
                 continue;

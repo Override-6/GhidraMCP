@@ -1,11 +1,15 @@
 package com.lauriewired.util;
 
+import ghidra.app.services.DataTypeManagerService;
+import ghidra.framework.plugintool.PluginTool;
+import ghidra.program.model.data.BuiltInDataTypeManager;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.util.Msg;
 
 import java.util.Iterator;
+import java.util.Optional;
 
 /**
  * Utility class for data type resolution and lookup
@@ -13,25 +17,41 @@ import java.util.Iterator;
 public class DataTypeUtils {
 
     /**
-     * Resolves a data type by name, handling common types and pointer types.
-     * Pointer types will use the correct size based on the program's architecture
-     * (8 bytes for 64-bit, 4 bytes for 32-bit).
+     * Resolves a data type by name, searching Program DTM, Built-ins, and Linked Archives.
+     * * @param dtm The data type manager (usually program.getDataTypeManager())
      *
-     * @param dtm The data type manager
-     * @param typeName The type name to resolve (e.g., "int", "void*", "MyStruct*", "PVOID")
+     * @param typeName The type name to resolve (e.g., "double", "StringItem*", "size_t")
      * @return The resolved DataType, or null if not found
      */
-    public static DataType resolveDataType(DataTypeManager dtm, String typeName) {
-        if (typeName == null || typeName.isEmpty()) {
-            return null;
-        }
+    public static DataType resolveDataType(DataTypeManager dtm, String typeName, PluginTool tool) {
 
-        // Trim whitespace
+        if (typeName == null || typeName.isEmpty()) return null;
         typeName = typeName.trim();
 
-        // Handle C-style pointer types (e.g., "void*", "MyStruct *", "int**")
+        DataType result = resolveDataTypeFor(dtm, typeName, tool);
+        if (result != null)
+            return result;
+
+        DataTypeManagerService dtms =
+                tool.getService(DataTypeManagerService.class);
+
+        for (DataTypeManager otherDtm : dtms.getDataTypeManagers()) {
+            if (otherDtm == dtm)
+                continue;
+
+
+            result = resolveDataTypeFor(otherDtm, typeName, tool);
+            if (result != null)
+                return result;
+        }
+
+        return result;
+    }
+
+    private static DataType resolveDataTypeFor(DataTypeManager dtm, String typeName, PluginTool tool) {
+
+        // 1. HANDLE POINTERS (Recursive)
         if (typeName.endsWith("*")) {
-            // Count pointer depth and get base type
             int pointerDepth = 0;
             String baseTypeName = typeName;
             while (baseTypeName.endsWith("*")) {
@@ -39,131 +59,44 @@ public class DataTypeUtils {
                 baseTypeName = baseTypeName.substring(0, baseTypeName.length() - 1).trim();
             }
 
-            // Resolve the base type
-            DataType baseType;
-            if (baseTypeName.isEmpty() || baseTypeName.equalsIgnoreCase("void")) {
-                baseType = dtm.getDataType("/void");
-            } else {
-                baseType = resolveDataType(dtm, baseTypeName);
-            }
+            DataType baseType = resolveDataType(dtm, baseTypeName, tool);
 
+            // If base type is unknown, default to void* rather than failing
             if (baseType == null) {
-                Msg.warn(DataTypeUtils.class, "Base type not found for pointer: " + baseTypeName + ", using void");
-                baseType = dtm.getDataType("/void");
+                Msg.warn(DataTypeUtils.class, "Base type '" + baseTypeName + "' not found, using void* for " + typeName);
+                baseType = DataType.VOID;
             }
 
-            // Wrap in pointer types (using dtm for correct pointer size based on architecture)
             DataType result = baseType;
             for (int i = 0; i < pointerDepth; i++) {
                 result = new PointerDataType(result, dtm);
             }
-
-            Msg.info(DataTypeUtils.class, "Resolved pointer type: " + typeName + " -> " +
-                    result.getDisplayName() + " (size: " + result.getLength() + " bytes)");
             return result;
         }
 
-        // First try to find exact match in all categories
-        DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
-        if (dataType != null) {
-            Msg.info(DataTypeUtils.class, "Found exact data type match: " + dataType.getPathName());
-            return dataType;
+        // We check exact matches and all categories
+        DataType dt = findDataTypeByNameInAllCategories(dtm, typeName);
+        if (dt != null) return dt;
+
+        BuiltInDataTypeManager builtins = BuiltInDataTypeManager.getDataTypeManager();
+
+        dt = builtins.getDataType(typeName);
+        if (dt != null) return dt;
+
+        if (typeName.contains("/")) {
+            dt = dtm.getDataType(typeName);
+            if (dt != null) return dt;
         }
 
-        // Check for Windows-style pointer types (PXXX)
-        if (typeName.startsWith("P") && typeName.length() > 1 && Character.isUpperCase(typeName.charAt(1))) {
-            String baseTypeName = typeName.substring(1);
+        DataTypeManagerService dtms =
+                tool.getService(DataTypeManagerService.class);
 
-            // Special case for PVOID
-            if (baseTypeName.equals("VOID")) {
-                return new PointerDataType(dtm.getDataType("/void"), dtm);
-            }
-
-            // Try to find the base type
-            DataType baseType = findDataTypeByNameInAllCategories(dtm, baseTypeName);
-            if (baseType != null) {
-                return new PointerDataType(baseType, dtm);
-            }
-
-            Msg.warn(DataTypeUtils.class, "Base type not found for " + typeName + ", defaulting to void*");
-            return new PointerDataType(dtm.getDataType("/void"), dtm);
+        for (DataTypeManager dtmBis : dtms.getDataTypeManagers()) {
+            if (dtmBis == dtm) continue;
         }
 
-        // Handle common built-in types
-        switch (typeName.toLowerCase()) {
-            case "int":
-                return dtm.getDataType("/int");
-            case "long":
-                // In C, 'long' can vary by platform. Use longlong for 64-bit compatibility
-                DataType longType = dtm.getDataType("/long");
-                if (longType != null) {
-                    return longType;
-                }
-                return dtm.getDataType("/int");
-            case "uint":
-            case "unsigned int":
-            case "dword":
-                return dtm.getDataType("/uint");
-            case "ulong":
-            case "unsigned long":
-                DataType ulongType = dtm.getDataType("/ulong");
-                if (ulongType != null) {
-                    return ulongType;
-                }
-                return dtm.getDataType("/uint");
-            case "short":
-                return dtm.getDataType("/short");
-            case "ushort":
-            case "unsigned short":
-            case "word":
-                return dtm.getDataType("/ushort");
-            case "char":
-            case "byte":
-                return dtm.getDataType("/char");
-            case "uchar":
-            case "unsigned char":
-                return dtm.getDataType("/uchar");
-            case "longlong":
-            case "long long":
-            case "__int64":
-            case "int64":
-            case "qword":
-                return dtm.getDataType("/longlong");
-            case "ulonglong":
-            case "unsigned long long":
-            case "unsigned __int64":
-            case "uint64":
-                return dtm.getDataType("/ulonglong");
-            case "bool":
-            case "boolean":
-                return dtm.getDataType("/bool");
-            case "float":
-                return dtm.getDataType("/float");
-            case "double":
-                return dtm.getDataType("/double");
-            case "void":
-                return dtm.getDataType("/void");
-            case "size_t":
-            case "uintptr_t":
-            case "intptr_t":
-                // These should be pointer-sized - use the architecture's natural size
-                int pointerSize = dtm.getDataOrganization().getPointerSize();
-                if (pointerSize == 8) {
-                    return dtm.getDataType("/ulonglong");
-                } else {
-                    return dtm.getDataType("/uint");
-                }
-            default:
-                // Try as a direct path
-                DataType directType = dtm.getDataType("/" + typeName);
-                if (directType != null) {
-                    return directType;
-                }
-
-                // Fallback to int if we couldn't find it
-                Msg.warn(DataTypeUtils.class, "Unknown type: " + typeName + ", defaulting to int");
-                return dtm.getDataType("/int");
-        }
+        Msg.warn(DataTypeUtils.class, "Could not resolve type: " + typeName);
+        return null;
     }
 
     /**

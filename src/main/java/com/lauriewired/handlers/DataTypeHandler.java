@@ -1,6 +1,8 @@
 package com.lauriewired.handlers;
 
 import com.lauriewired.util.DataTypeUtils;
+import com.lauriewired.util.ThreadUtils;
+import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
@@ -8,7 +10,6 @@ import ghidra.util.Msg;
 import javax.swing.SwingUtilities;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -18,139 +19,18 @@ import java.util.concurrent.atomic.AtomicReference;
 public class DataTypeHandler {
 
     private final ProgramProvider programProvider;
+    private final PluginTool tool;
 
     public DataTypeHandler(ProgramProvider programProvider) {
         this.programProvider = programProvider;
-    }
-
-    /**
-     * Rename a field within a structure.
-     *
-     * @param structureName The name of the structure
-     * @param oldFieldName The current field name
-     * @param newFieldName The new field name
-     * @return Result message
-     */
-    public String renameStructureField(String structureName, String oldFieldName, String newFieldName) {
-        Program program = programProvider.getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (structureName == null || structureName.isEmpty()) return "Structure name is required";
-        if (oldFieldName == null || oldFieldName.isEmpty()) return "Old field name is required";
-        if (newFieldName == null || newFieldName.isEmpty()) return "New field name is required";
-
-        AtomicReference<String> result = new AtomicReference<>("Failed to rename field");
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Rename structure field");
-                try {
-                    DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
-
-                    if (struct == null) {
-                        result.set("Structure not found: " + structureName);
-                        return;
-                    }
-
-                    DataTypeComponent component = findComponentByName(struct, oldFieldName);
-                    if (component == null) {
-                        result.set("Field not found: " + oldFieldName + " in structure " + structureName);
-                        return;
-                    }
-
-                    // Get the component index for modification
-                    int ordinal = component.getOrdinal();
-                    try {
-                        struct.getComponent(ordinal).setFieldName(newFieldName);
-                        result.set("Field renamed successfully: " + oldFieldName + " -> " + newFieldName);
-                    } catch (Exception e) {
-                        result.set("Error renaming field: " + e.getMessage());
-                    }
-                } finally {
-                    program.endTransaction(tx, result.get().startsWith("Field renamed"));
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            Msg.error(this, "Failed to rename structure field on Swing thread", e);
-            return "Error: " + e.getMessage();
-        }
-
-        return result.get();
-    }
-
-    /**
-     * Retype a field within a structure.
-     *
-     * @param structureName The name of the structure
-     * @param fieldName The field name to retype
-     * @param newTypeName The new type name
-     * @return Result message
-     */
-    public String retypeStructureField(String structureName, String fieldName, String newTypeName) {
-        Program program = programProvider.getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (structureName == null || structureName.isEmpty()) return "Structure name is required";
-        if (fieldName == null || fieldName.isEmpty()) return "Field name is required";
-        if (newTypeName == null || newTypeName.isEmpty()) return "New type name is required";
-
-        AtomicReference<String> result = new AtomicReference<>("Failed to retype field");
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Retype structure field");
-                try {
-                    DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
-
-                    if (struct == null) {
-                        result.set("Structure not found: " + structureName);
-                        return;
-                    }
-
-                    DataTypeComponent component = findComponentByName(struct, fieldName);
-                    if (component == null) {
-                        result.set("Field not found: " + fieldName + " in structure " + structureName);
-                        return;
-                    }
-
-                    DataType newType = DataTypeUtils.resolveDataType(dtm, newTypeName);
-                    if (newType == null) {
-                        result.set("Could not resolve data type: " + newTypeName);
-                        return;
-                    }
-
-                    int ordinal = component.getOrdinal();
-                    int offset = component.getOffset();
-                    String currentFieldName = component.getFieldName();
-                    String comment = component.getComment();
-
-                    try {
-                        // Replace the component with the new type
-                        int newSize = newType.getLength();
-                        struct.replaceAtOffset(offset, newType, newSize,
-                                currentFieldName, comment);
-                        result.set("Field retyped successfully: " + fieldName + " -> " + newTypeName +
-                                " (size: " + newSize + " bytes)");
-                    } catch (Exception e) {
-                        result.set("Error retyping field: " + e.getMessage());
-                    }
-                } finally {
-                    program.endTransaction(tx, result.get().startsWith("Field retyped"));
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            Msg.error(this, "Failed to retype structure field on Swing thread", e);
-            return "Error: " + e.getMessage();
-        }
-
-        return result.get();
+        this.tool = programProvider.getTool();
     }
 
     /**
      * Bulk rename structure fields.
      *
      * @param structureName The name of the structure
-     * @param renames List of {oldName, newName} pairs as JSON-like format
+     * @param renames       List of {oldName, newName} pairs as JSON-like format
      * @return Result message with success/failure for each rename
      */
     public String bulkRenameStructureFields(String structureName, List<Map<String, String>> renames) {
@@ -163,7 +43,7 @@ public class DataTypeHandler {
         StringBuilder sb = new StringBuilder();
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Bulk rename structure fields");
                 int successCount = 0;
                 try {
@@ -217,7 +97,7 @@ public class DataTypeHandler {
      * Bulk retype structure fields.
      *
      * @param structureName The name of the structure
-     * @param retypes List of {fieldName, newType} pairs
+     * @param retypes       List of {fieldName, newType} pairs
      * @return Result message with success/failure for each retype
      */
     public String bulkRetypeStructureFields(String structureName, List<Map<String, String>> retypes) {
@@ -230,7 +110,7 @@ public class DataTypeHandler {
         StringBuilder sb = new StringBuilder();
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Bulk retype structure fields");
                 int successCount = 0;
                 try {
@@ -257,7 +137,7 @@ public class DataTypeHandler {
                             continue;
                         }
 
-                        DataType newType = DataTypeUtils.resolveDataType(dtm, newTypeName);
+                        DataType newType = DataTypeUtils.resolveDataType(dtm, newTypeName, tool);
                         if (newType == null) {
                             sb.append("FAIL: Could not resolve type: ").append(newTypeName).append("\n");
                             continue;
@@ -294,9 +174,9 @@ public class DataTypeHandler {
     /**
      * Create a new structure data type.
      *
-     * @param name Structure name
+     * @param name         Structure name
      * @param categoryPath Category path (e.g., "/MyTypes")
-     * @param size Initial size (0 for auto-size)
+     * @param size         Initial size (0 for auto-size)
      * @return Result message
      */
     public String createStructure(String name, String categoryPath, int size) {
@@ -307,7 +187,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to create structure");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Create structure");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -348,29 +228,33 @@ public class DataTypeHandler {
     /**
      * Create a new structure data type with fields.
      *
-     * @param name Structure name
+     * @param name         Structure name
      * @param categoryPath Category path (e.g., "/MyTypes")
-     * @param size Initial size (0 for auto-size)
-     * @param fields List of field definitions, each with "name", "type", and optionally "offset"
+     * @param size         Initial size (0 for auto-size)
+     * @param fields       List of field definitions, each with "name", "type", and optionally "offset"
      * @return Result message
      */
     public String createStructureWithFields(String name, String categoryPath, int size,
-            List<Map<String, String>> fields) {
+                                            List<Map<String, String>> fields) {
+        Msg.info(this, String.format("create new structure %s with fields %s", name, fields));
         Program program = programProvider.getCurrentProgram();
         if (program == null) return "No program loaded";
         if (name == null || name.isEmpty()) return "Structure name is required";
 
         AtomicReference<String> result = new AtomicReference<>("Failed to create structure");
         StringBuilder sb = new StringBuilder();
-
+        Msg.info(this, "A");
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                Msg.info(this, "B");
                 int tx = program.startTransaction("Create structure with fields");
+                Msg.info(this, "Transaction started");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-
+                    Msg.info(this, "dtm = " + dtm);
                     // Check if structure already exists
                     Structure existing = findStructure(dtm, name);
+                    Msg.info(this, "existing = " + existing);
                     if (existing != null) {
                         result.set("Structure already exists: " + existing.getPathName() +
                                 ". Use existing structure or choose a different name.");
@@ -382,13 +266,18 @@ public class DataTypeHandler {
                             ? new CategoryPath(categoryPath)
                             : CategoryPath.ROOT;
 
+                    Msg.info(this, "catPath = " + catPath);
+
                     // Create the structure
                     StructureDataType newStruct = new StructureDataType(catPath, name, size, dtm);
+
+                    Msg.info(this, "created new struct");
 
                     // Add fields if provided
                     int fieldSuccessCount = 0;
                     if (fields != null && !fields.isEmpty()) {
                         for (Map<String, String> field : fields) {
+                            Msg.info(this, String.format("adding field %s", field));
                             String fieldName = field.get("name");
                             String fieldTypeName = field.get("type");
                             String offsetStr = field.get("offset");
@@ -398,7 +287,7 @@ public class DataTypeHandler {
                                 continue;
                             }
 
-                            DataType fieldType = DataTypeUtils.resolveDataType(dtm, fieldTypeName);
+                            DataType fieldType = DataTypeUtils.resolveDataType(dtm, fieldTypeName, tool);
                             if (fieldType == null) {
                                 sb.append("SKIP: Could not resolve type '").append(fieldTypeName)
                                         .append("' for field ").append(fieldName).append("\n");
@@ -421,7 +310,7 @@ public class DataTypeHandler {
                             }
                         }
                     }
-
+                    Msg.info(this, "end of field addition");
                     DataType addedType = dtm.addDataType(newStruct, DataTypeConflictHandler.REPLACE_HANDLER);
 
                     // Get final structure to report size
@@ -447,13 +336,13 @@ public class DataTypeHandler {
     }
 
     /**
-     * Add multiple fields to an existing structure in a single operation.
+     * Update multiple fields in an existing structure (add or replace at offset).
      *
      * @param structureName The structure to modify
-     * @param fields List of field definitions, each with "name", "type", and optionally "offset"
+     * @param fields        List of field definitions, each with "name", "type", and optionally "offset"
      * @return Result message with success/failure for each field
      */
-    public String bulkAddStructureFields(String structureName, List<Map<String, String>> fields) {
+    public String bulkUpdateStructureFields(String structureName, List<Map<String, String>> fields) {
         Program program = programProvider.getCurrentProgram();
         if (program == null) return "No program loaded";
         if (structureName == null || structureName.isEmpty()) return "Structure name is required";
@@ -463,8 +352,8 @@ public class DataTypeHandler {
         StringBuilder sb = new StringBuilder();
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Bulk add structure fields");
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk update structure fields");
                 int successCount = 0;
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -486,7 +375,7 @@ public class DataTypeHandler {
                             continue;
                         }
 
-                        DataType fieldType = DataTypeUtils.resolveDataType(dtm, fieldTypeName);
+                        DataType fieldType = DataTypeUtils.resolveDataType(dtm, fieldTypeName, tool);
                         if (fieldType == null) {
                             sb.append("FAIL: Could not resolve type '").append(fieldTypeName)
                                     .append("' for field ").append(fieldName).append("\n");
@@ -497,7 +386,8 @@ public class DataTypeHandler {
                             int fieldSize = fieldType.getLength();
                             if (offsetStr != null && !offsetStr.isEmpty()) {
                                 int offset = Integer.parseInt(offsetStr);
-                                struct.insertAtOffset(offset, fieldType, fieldSize, fieldName, null);
+                                // Use replaceAtOffset to update existing or insert new
+                                struct.replaceAtOffset(offset, fieldType, fieldSize, fieldName, null);
                                 sb.append("OK: +0x").append(Integer.toHexString(offset)).append(": ")
                                         .append(fieldName).append(" (").append(fieldTypeName)
                                         .append(", ").append(fieldSize).append(" bytes)\n");
@@ -512,16 +402,279 @@ public class DataTypeHandler {
                         }
                     }
 
-                    sb.insert(0, "Bulk add fields to " + structureName + " completed. Success: " +
+                    sb.insert(0, "Bulk update fields in " + structureName + " completed. Success: " +
                             successCount + "/" + fields.size() + "\n" +
-                            "New structure size: " + struct.getLength() + " bytes\n");
+                            "Structure size: " + struct.getLength() + " bytes\n");
                 } finally {
                     program.endTransaction(tx, true);
                 }
                 result.set(sb.toString());
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            Msg.error(this, "Failed to bulk add structure fields on Swing thread", e);
+            Msg.error(this, "Failed to bulk update structure fields on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        return result.get();
+    }
+
+    /**
+     * Resize multiple structures in a single operation.
+     *
+     * @param resizes List of {structure_name, new_size} pairs
+     * @return Result message with success/failure for each resize
+     */
+    public String bulkResizeStructures(List<Map<String, String>> resizes) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (resizes == null || resizes.isEmpty()) return "Resize list is required";
+
+        AtomicReference<String> result = new AtomicReference<>();
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk resize structures");
+                int successCount = 0;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    for (Map<String, String> resize : resizes) {
+                        String structName = resize.get("structure_name");
+                        String newSizeStr = resize.get("new_size");
+
+                        if (structName == null || newSizeStr == null) {
+                            sb.append("SKIP: Invalid entry (missing structure_name or new_size)\n");
+                            continue;
+                        }
+
+                        int newSize;
+                        try {
+                            newSize = Integer.parseInt(newSizeStr);
+                        } catch (NumberFormatException e) {
+                            sb.append("SKIP: Invalid size for ").append(structName).append("\n");
+                            continue;
+                        }
+
+                        Structure struct = findStructure(dtm, structName);
+                        if (struct == null) {
+                            sb.append("FAIL: Structure not found: ").append(structName).append("\n");
+                            continue;
+                        }
+
+                        int currentSize = struct.getLength();
+                        if (newSize <= currentSize) {
+                            sb.append("SKIP: ").append(structName)
+                                    .append(" cannot shrink (").append(currentSize).append(" -> ").append(newSize).append(")\n");
+                            continue;
+                        }
+
+                        try {
+                            struct.growStructure(newSize - currentSize);
+                            sb.append("OK: ").append(structName)
+                                    .append(" resized ").append(currentSize).append(" -> ").append(newSize).append(" bytes\n");
+                            successCount++;
+                        } catch (Exception e) {
+                            sb.append("FAIL: ").append(structName).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+
+                    sb.insert(0, "Bulk resize completed. Success: " + successCount + "/" + resizes.size() + "\n");
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+                result.set(sb.toString());
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk resize structures on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        return result.get();
+    }
+
+    /**
+     * Get details for multiple structures in a single operation.
+     *
+     * @param names List of structure names to retrieve
+     * @return Combined structure details
+     */
+    public String bulkGetStructures(List<String> names) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (names == null || names.isEmpty()) return "Structure name list is required";
+
+        StringBuilder result = new StringBuilder();
+        DataTypeManager dtm = program.getDataTypeManager();
+
+        for (String name : names) {
+            result.append("=== ").append(name).append(" ===\n");
+
+            Structure struct = findStructure(dtm, name);
+            if (struct == null) {
+                result.append("NOT FOUND\n\n");
+                continue;
+            }
+
+            result.append("Path: ").append(struct.getPathName()).append("\n");
+            result.append("Size: ").append(struct.getLength()).append(" bytes\n");
+            result.append("Alignment: ").append(struct.getAlignment()).append("\n");
+            result.append("Fields:\n");
+
+            for (DataTypeComponent component : struct.getComponents()) {
+                String fieldName = component.getFieldName();
+                if (fieldName == null) fieldName = "(unnamed)";
+                result.append(String.format("  +0x%x: %s %s (size: %d)\n",
+                        component.getOffset(),
+                        component.getDataType().getName(),
+                        fieldName,
+                        component.getLength()));
+            }
+            result.append("\n");
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Add multiple values to existing enums in a single operation.
+     *
+     * @param values List of {enum_name, value_name, value} entries
+     * @return Result message with success/failure for each addition
+     */
+    public String bulkAddEnumValues(List<Map<String, String>> values) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (values == null || values.isEmpty()) return "Values list is required";
+
+        AtomicReference<String> result = new AtomicReference<>();
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk add enum values");
+                int successCount = 0;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    for (Map<String, String> entry : values) {
+                        String enumName = entry.get("enum_name");
+                        String valueName = entry.get("value_name");
+                        String valueStr = entry.get("value");
+
+                        if (enumName == null || valueName == null) {
+                            sb.append("SKIP: Missing enum_name or value_name\n");
+                            continue;
+                        }
+
+                        long value = 0;
+                        if (valueStr != null && !valueStr.isEmpty()) {
+                            try {
+                                value = Long.parseLong(valueStr);
+                            } catch (NumberFormatException e) {
+                                sb.append("SKIP: Invalid value for ").append(valueName).append("\n");
+                                continue;
+                            }
+                        }
+
+                        DataType dt = DataTypeUtils.findDataTypeByNameInAllCategories(dtm, enumName);
+                        if (!(dt instanceof ghidra.program.model.data.Enum)) {
+                            sb.append("FAIL: Enum not found: ").append(enumName).append("\n");
+                            continue;
+                        }
+
+                        try {
+                            ghidra.program.model.data.Enum enumType = (ghidra.program.model.data.Enum) dt;
+                            enumType.add(valueName, value);
+                            sb.append("OK: ").append(enumName).append(".").append(valueName)
+                                    .append(" = ").append(value).append("\n");
+                            successCount++;
+                        } catch (Exception e) {
+                            sb.append("FAIL: ").append(enumName).append(".").append(valueName)
+                                    .append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+
+                    sb.insert(0, "Bulk add enum values completed. Success: " + successCount + "/" + values.size() + "\n");
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+                result.set(sb.toString());
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk add enum values on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        return result.get();
+    }
+
+    /**
+     * Create multiple typedefs in a single operation.
+     *
+     * @param typedefs List of {name, base_type, category_path} entries
+     * @return Result message with success/failure for each typedef
+     */
+    public String bulkCreateTypedefs(List<Map<String, String>> typedefs) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (typedefs == null || typedefs.isEmpty()) return "Typedef list is required";
+
+        AtomicReference<String> result = new AtomicReference<>();
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk create typedefs");
+                int successCount = 0;
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    for (Map<String, String> entry : typedefs) {
+                        String name = entry.get("name");
+                        String baseTypeName = entry.get("base_type");
+                        String categoryPath = entry.getOrDefault("category_path", "");
+
+                        if (name == null || baseTypeName == null) {
+                            sb.append("SKIP: Missing name or base_type\n");
+                            continue;
+                        }
+
+                        // Check if already exists
+                        DataType existing = DataTypeUtils.findDataTypeByNameInAllCategories(dtm, name);
+                        if (existing != null) {
+                            sb.append("SKIP: Type already exists: ").append(name).append("\n");
+                            continue;
+                        }
+
+                        DataType baseType = DataTypeUtils.resolveDataType(dtm, baseTypeName, tool);
+                        if (baseType == null) {
+                            sb.append("FAIL: Could not resolve base type: ").append(baseTypeName).append("\n");
+                            continue;
+                        }
+
+                        try {
+                            CategoryPath catPath = categoryPath != null && !categoryPath.isEmpty()
+                                    ? new CategoryPath(categoryPath)
+                                    : CategoryPath.ROOT;
+
+                            TypedefDataType newTypedef = new TypedefDataType(catPath, name, baseType, dtm);
+                            dtm.addDataType(newTypedef, DataTypeConflictHandler.REPLACE_HANDLER);
+                            sb.append("OK: ").append(name).append(" -> ").append(baseTypeName).append("\n");
+                            successCount++;
+                        } catch (Exception e) {
+                            sb.append("FAIL: ").append(name).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+
+                    sb.insert(0, "Bulk create typedefs completed. Success: " + successCount + "/" + typedefs.size() + "\n");
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+                result.set(sb.toString());
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk create typedefs on Swing thread", e);
             return "Error: " + e.getMessage();
         }
 
@@ -531,9 +684,9 @@ public class DataTypeHandler {
     /**
      * Create a new enum data type.
      *
-     * @param name Enum name
+     * @param name         Enum name
      * @param categoryPath Category path (e.g., "/MyTypes")
-     * @param size Size in bytes (1, 2, 4, or 8)
+     * @param size         Size in bytes (1, 2, 4, or 8)
      * @return Result message
      */
     public String createEnum(String name, String categoryPath, int size) {
@@ -547,7 +700,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to create enum");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Create enum");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -584,9 +737,100 @@ public class DataTypeHandler {
     }
 
     /**
+     * Create a new enum data type with values.
+     *
+     * @param name         Enum name
+     * @param categoryPath Category path (e.g., "/MyTypes")
+     * @param size         Size in bytes (1, 2, 4, or 8)
+     * @param values       List of value definitions, each with "name" and "value" keys
+     * @return Result message
+     */
+    public String createEnumWithValues(String name, String categoryPath, int size,
+                                       List<Map<String, String>> values) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Enum name is required";
+        if (size != 1 && size != 2 && size != 4 && size != 8) {
+            return "Enum size must be 1, 2, 4, or 8 bytes";
+        }
+
+        AtomicReference<String> result = new AtomicReference<>("Failed to create enum");
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Create enum with values");
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    // Check if enum already exists
+                    DataType existing = DataTypeUtils.findDataTypeByNameInAllCategories(dtm, name);
+                    if (existing instanceof ghidra.program.model.data.Enum) {
+                        result.set("Enum already exists: " + existing.getPathName() +
+                                ". Use existing enum or choose a different name.");
+                        return;
+                    }
+
+                    CategoryPath catPath = categoryPath != null && !categoryPath.isEmpty()
+                            ? new CategoryPath(categoryPath)
+                            : CategoryPath.ROOT;
+
+                    EnumDataType newEnum = new EnumDataType(catPath, name, size, dtm);
+
+                    // Add values
+                    int valueSuccessCount = 0;
+                    if (values != null && !values.isEmpty()) {
+                        for (Map<String, String> val : values) {
+                            String valName = val.get("name");
+                            String valValueStr = val.get("value");
+                            if (valName == null || valName.isEmpty()) {
+                                sb.append("SKIP: Missing value name\n");
+                                continue;
+                            }
+                            long valValue = 0;
+                            if (valValueStr != null && !valValueStr.isEmpty()) {
+                                try {
+                                    valValue = Long.parseLong(valValueStr);
+                                } catch (NumberFormatException e) {
+                                    sb.append("SKIP: Invalid value for ").append(valName).append("\n");
+                                    continue;
+                                }
+                            }
+                            try {
+                                newEnum.add(valName, valValue);
+                                sb.append("OK: ").append(valName).append(" = ").append(valValue).append("\n");
+                                valueSuccessCount++;
+                            } catch (Exception e) {
+                                sb.append("FAIL: ").append(valName).append(" - ").append(e.getMessage()).append("\n");
+                            }
+                        }
+                    }
+
+                    DataType addedType = dtm.addDataType(newEnum, DataTypeConflictHandler.REPLACE_HANDLER);
+
+                    sb.insert(0, "Enum created: " + addedType.getPathName() + "\n" +
+                            "Values added: " + valueSuccessCount + "/" +
+                            (values != null ? values.size() : 0) + "\n");
+                    result.set(sb.toString());
+                } catch (Exception e) {
+                    result.set("Error creating enum: " + e.getMessage());
+                    Msg.error(this, "Error creating enum", e);
+                } finally {
+                    program.endTransaction(tx, result.get().startsWith("Enum created"));
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to create enum on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        return result.get();
+    }
+
+    /**
      * Create a new typedef.
      *
-     * @param name Typedef name
+     * @param name         Typedef name
      * @param baseTypeName The base type to alias
      * @param categoryPath Category path (e.g., "/MyTypes")
      * @return Result message
@@ -600,7 +844,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to create typedef");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Create typedef");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -614,7 +858,7 @@ public class DataTypeHandler {
                     }
 
                     // Resolve base type
-                    DataType baseType = DataTypeUtils.resolveDataType(dtm, baseTypeName);
+                    DataType baseType = DataTypeUtils.resolveDataType(dtm, baseTypeName, tool);
                     if (baseType == null) {
                         result.set("Could not resolve base type: " + baseTypeName);
                         return;
@@ -644,72 +888,11 @@ public class DataTypeHandler {
     }
 
     /**
-     * Add a field to an existing structure.
-     *
-     * @param structureName The structure to modify
-     * @param fieldName The new field name
-     * @param fieldTypeName The field type
-     * @param offset Offset in the structure (-1 to append)
-     * @return Result message
-     */
-    public String addStructureField(String structureName, String fieldName, String fieldTypeName, int offset) {
-        Program program = programProvider.getCurrentProgram();
-        if (program == null) return "No program loaded";
-        if (structureName == null || structureName.isEmpty()) return "Structure name is required";
-        if (fieldTypeName == null || fieldTypeName.isEmpty()) return "Field type is required";
-
-        AtomicReference<String> result = new AtomicReference<>("Failed to add field");
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Add structure field");
-                try {
-                    DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
-
-                    if (struct == null) {
-                        result.set("Structure not found: " + structureName);
-                        return;
-                    }
-
-                    DataType fieldType = DataTypeUtils.resolveDataType(dtm, fieldTypeName);
-                    if (fieldType == null) {
-                        result.set("Could not resolve field type: " + fieldTypeName);
-                        return;
-                    }
-
-                    int fieldSize = fieldType.getLength();
-                    if (offset < 0) {
-                        // Append to end
-                        struct.add(fieldType, fieldSize, fieldName, null);
-                    } else {
-                        // Insert at specific offset
-                        struct.insertAtOffset(offset, fieldType, fieldSize, fieldName, null);
-                    }
-
-                    result.set("Field added: " + fieldName + " (" + fieldTypeName + ", size: " +
-                            fieldSize + " bytes) to " + structureName);
-                } catch (Exception e) {
-                    result.set("Error adding field: " + e.getMessage());
-                    Msg.error(this, "Error adding field", e);
-                } finally {
-                    program.endTransaction(tx, result.get().startsWith("Field added"));
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            Msg.error(this, "Failed to add structure field on Swing thread", e);
-            return "Error: " + e.getMessage();
-        }
-
-        return result.get();
-    }
-
-    /**
      * Add a value to an existing enum.
      *
-     * @param enumName The enum to modify
+     * @param enumName  The enum to modify
      * @param valueName The new value name
-     * @param value The numeric value
+     * @param value     The numeric value
      * @return Result message
      */
     public String addEnumValue(String enumName, String valueName, long value) {
@@ -721,7 +904,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to add enum value");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Add enum value");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -755,7 +938,7 @@ public class DataTypeHandler {
      * Resize a structure to a specific size.
      *
      * @param structureName The name of the structure
-     * @param newSize The new size in bytes
+     * @param newSize       The new size in bytes
      * @return Result message
      */
     public String resizeStructure(String structureName, int newSize) {
@@ -767,7 +950,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to resize structure");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Resize structure");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -785,27 +968,14 @@ public class DataTypeHandler {
                         return;
                     }
 
-                    if (newSize > currentSize) {
-                        // Grow the structure by adding undefined bytes at the end
-                        struct.growStructure(newSize - currentSize);
-                        result.set("Structure resized from " + currentSize + " to " + newSize + " bytes");
-                    } else {
-                        // Shrink - need to delete components that extend beyond new size
-                        // First, delete all components that start at or after newSize
-                        for (int i = struct.getNumComponents() - 1; i >= 0; i--) {
-                            DataTypeComponent comp = struct.getComponent(i);
-                            if (comp.getOffset() >= newSize) {
-                                struct.delete(i);
-                            } else if (comp.getOffset() + comp.getLength() > newSize) {
-                                // Component spans the boundary - delete it too
-                                struct.delete(i);
-                            }
-                        }
-                        // Now set explicit minimum size if needed
-                        // Note: Some versions of Ghidra may not support shrinking below data
-                        result.set("Structure resized from " + currentSize + " to approximately " +
-                                struct.getLength() + " bytes (components extending beyond were removed)");
+                    if (newSize < currentSize) {
+                        result.set("Cannot shrink data structure ! attempted to set new size to " + newSize + " where structure is larger (current size = " + currentSize + ")");
+                        return;
                     }
+
+                    // Grow the structure by adding undefined bytes at the end
+                    struct.growStructure(newSize - currentSize);
+                    result.set("Structure resized from " + currentSize + " to " + newSize + " bytes");
                 } catch (Exception e) {
                     result.set("Error resizing structure: " + e.getMessage());
                     Msg.error(this, "Error resizing structure", e);
@@ -825,15 +995,15 @@ public class DataTypeHandler {
      * Create a new function definition (function type).
      * Function definitions are used for function pointers in structures (e.g., vtables).
      *
-     * @param name The function type name (e.g., "UpdateFunc", "VTable_Method1")
+     * @param name           The function type name (e.g., "UpdateFunc", "VTable_Method1")
      * @param returnTypeName Return type (e.g., "void", "int", "Player*")
      * @param parameterTypes List of parameter type names (e.g., ["void*", "int", "float"])
      * @param parameterNames List of parameter names (e.g., ["this", "param1", "delta"])
-     * @param categoryPath Category path (e.g., "/VTables", "/FunctionTypes")
+     * @param categoryPath   Category path (e.g., "/VTables", "/FunctionTypes")
      * @return Result message
      */
     public String createFunctionDefinition(String name, String returnTypeName,
-            List<String> parameterTypes, List<String> parameterNames, String categoryPath) {
+                                           List<String> parameterTypes, List<String> parameterNames, String categoryPath) {
         Program program = programProvider.getCurrentProgram();
         if (program == null) return "No program loaded";
         if (name == null || name.isEmpty()) return "Function definition name is required";
@@ -842,7 +1012,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to create function definition");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Create function definition");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
@@ -856,7 +1026,7 @@ public class DataTypeHandler {
                     }
 
                     // Resolve return type
-                    DataType returnType = DataTypeUtils.resolveDataType(dtm, returnTypeName);
+                    DataType returnType = DataTypeUtils.resolveDataType(dtm, returnTypeName, tool);
                     if (returnType == null) {
                         result.set("Could not resolve return type: " + returnTypeName);
                         return;
@@ -877,7 +1047,7 @@ public class DataTypeHandler {
 
                         for (int i = 0; i < numParams; i++) {
                             String paramTypeName = parameterTypes.get(i);
-                            DataType paramType = DataTypeUtils.resolveDataType(dtm, paramTypeName);
+                            DataType paramType = DataTypeUtils.resolveDataType(dtm, paramTypeName, tool);
 
                             if (paramType == null) {
                                 result.set("Could not resolve parameter type: " + paramTypeName);
@@ -931,7 +1101,7 @@ public class DataTypeHandler {
      * Create a function definition from a C-style prototype string.
      * This parses a prototype like "void* (*UpdateFunc)(Player* this, float delta)"
      *
-     * @param prototype The function prototype string
+     * @param prototype    The function prototype string
      * @param categoryPath Category path (e.g., "/VTables")
      * @return Result message
      */
@@ -943,7 +1113,7 @@ public class DataTypeHandler {
         AtomicReference<String> result = new AtomicReference<>("Failed to create function definition");
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Create function definition from prototype");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();

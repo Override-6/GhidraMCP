@@ -59,6 +59,22 @@ def safe_post(endpoint: str, data: dict | str) -> str:
         return f"Request failed: {str(e)}"
 
 
+def safe_post_json(endpoint: str, data: dict) -> str:
+    """
+    Perform a POST request with JSON body.
+    """
+    try:
+        url = urljoin(ghidra_server_url, endpoint)
+        response = requests.post(url, json=data, timeout=60)
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.strip()
+        else:
+            return f"Error {response.status_code}: {response.text.strip()}"
+    except Exception as e:
+        return f"Request failed: {str(e)}"
+
+
 # ============================================================================
 # ANALYSIS INITIALIZATION - Call these at the start of analysis
 # ============================================================================
@@ -347,6 +363,32 @@ def decompile_function_by_address(address: str) -> str:
 
 
 @mcp.tool()
+def decompile_function_with_context(address: str) -> str:
+    """
+    Decompile a function and return comprehensive context for analysis.
+
+    This is the RECOMMENDED way to decompile functions as it provides all the
+    context needed to understand and modify the function in one call.
+
+    Returns:
+    - Decompiled C code with function metadata (name, address, signature)
+    - All type definitions used in the function (structures, enums, function types)
+    - All called function prototypes with their addresses
+
+    Args:
+        address: Function address in hex (e.g., "0x1400010a0")
+
+    Use this before calling commit_function_analysis() to understand:
+    - What types need to be created or modified
+    - What called functions might need renaming
+    - Variable types and names that can be improved
+
+    Returns: Comprehensive decompilation with full context.
+    """
+    return "\n".join(safe_get("decompile_function_with_context", {"address": address}))
+
+
+@mcp.tool()
 def disassemble_function(address: str) -> list:
     """
     Get the assembly code for a function.
@@ -371,20 +413,6 @@ def get_function_by_address(address: str) -> str:
     - Body bounds (start - end address)
     """
     return "\n".join(safe_get("get_function_by_address", {"address": address}))
-
-
-# @mcp.tool()
-def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> list:
-    """
-    Search for functions by substring match in their names.
-
-    For more powerful pattern matching, use search_functions_by_regex().
-
-    Returns: List of "name @ address" for matching functions.
-    """
-    if not query:
-        return ["Error: query string is required"]
-    return safe_get("searchFunctions", {"query": query, "offset": offset, "limit": limit})
 
 
 @mcp.tool()
@@ -479,57 +507,8 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
 
 
 # ============================================================================
-# SINGLE RENAME/RETYPE OPERATIONS
+# DATA OPERATIONS - Rename data labels
 # ============================================================================
-
-@mcp.tool()
-def rename_function(old_name: str, new_name: str) -> str:
-    """
-    Rename a function by its current name.
-
-    For bulk operations after analyzing a function, use bulk_rename_functions().
-
-    Returns: Success/failure message.
-    """
-    return safe_post("renameFunction", {"oldName": old_name, "newName": new_name})
-
-
-@mcp.tool()
-def rename_function_by_address(function_address: str, new_name: str) -> str:
-    """
-    Rename a function by its address.
-
-    For bulk operations after analyzing a function, use bulk_rename_functions().
-
-    Args:
-        function_address: Function address in hex
-        new_name: New name for the function
-
-    Returns: Success/failure message.
-    """
-    return safe_post("rename_function_by_address", {"function_address": function_address, "new_name": new_name})
-
-
-@mcp.tool()
-def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
-    """
-    Rename a local variable within a function.
-
-    For bulk operations after analyzing a function, use bulk_rename_variables().
-
-    Args:
-        function_name: Name of the containing function
-        old_name: Current variable name (e.g., "local_10", "param_1")
-        new_name: New descriptive name
-
-    Returns: Success/failure message.
-    """
-    return safe_post("renameVariable", {
-        "functionName": function_name,
-        "oldName": old_name,
-        "newName": new_name
-    })
-
 
 @mcp.tool()
 def rename_data(address: str, new_name: str) -> str:
@@ -541,160 +520,6 @@ def rename_data(address: str, new_name: str) -> str:
     Returns: Success/failure message.
     """
     return safe_post("renameData", {"address": address, "newName": new_name})
-
-
-@mcp.tool()
-def set_function_prototype(function_address: str, prototype: str) -> str:
-    """
-    Set a function's full prototype (return type, name, parameters).
-
-    For bulk operations, use bulk_set_function_prototypes().
-
-    Args:
-        function_address: Function address in hex
-        prototype: Full C-style prototype, e.g., "int update_session(GameSession* session, int flags)"
-
-    The prototype should include:
-    - Return type
-    - Function name
-    - Parameters with types and names
-
-    Example prototypes:
-    - "void* malloc(size_t size)"
-    - "int Player::update(float delta_time)"
-    - "GameSession* create_session(int session_type, Player* owner)"
-
-    Returns: Success/failure message with any warnings.
-    """
-    return safe_post("set_function_prototype", {"function_address": function_address, "prototype": prototype})
-
-
-@mcp.tool()
-def set_local_variable_type(function_address: str, variable_name: str, new_type: str) -> str:
-    """
-    Set a local variable's data type.
-
-    For bulk operations, use bulk_set_variable_types().
-
-    Args:
-        function_address: Function address in hex
-        variable_name: Name of the variable to retype
-        new_type: New type name (e.g., "int", "GameSession*", "Player")
-
-    Supports:
-    - Built-in types: int, uint, char, void, bool, etc.
-    - Pointer types: Type* or PType (Windows-style)
-    - Custom types: Any structure/typedef defined in the program
-
-    Returns: Success/failure message.
-    """
-    return safe_post("set_local_variable_type", {"function_address": function_address, "variable_name": variable_name, "new_type": new_type})
-
-
-# ============================================================================
-# STRUCTURE FIELD OPERATIONS
-# ============================================================================
-
-@mcp.tool()
-def rename_structure_field(structure_name: str, old_field_name: str, new_field_name: str) -> str:
-    """
-    Rename a field within a structure.
-
-    For bulk operations, use bulk_rename_structure_fields().
-
-    Args:
-        structure_name: Name of the structure
-        old_field_name: Current field name
-        new_field_name: New descriptive name
-
-    Returns: Success/failure message.
-    """
-    return safe_post("rename_structure_field", {
-        "structure_name": structure_name,
-        "old_field_name": old_field_name,
-        "new_field_name": new_field_name
-    })
-
-
-@mcp.tool()
-def retype_structure_field(structure_name: str, field_name: str, new_type: str) -> str:
-    """
-    Change the data type of a structure field.
-
-    For bulk operations, use bulk_retype_structure_fields().
-
-    Args:
-        structure_name: Name of the structure
-        field_name: Name of the field to retype
-        new_type: New type for the field
-
-    Returns: Success/failure message.
-    """
-    return safe_post("retype_structure_field", {
-        "structure_name": structure_name,
-        "field_name": field_name,
-        "new_type": new_type
-    })
-
-
-@mcp.tool()
-def add_structure_field(structure_name: str, field_name: str, field_type: str, offset: int = -1) -> str:
-    """
-    Add a new field to an existing structure.
-
-    Args:
-        structure_name: Name of the structure to modify
-        field_name: Name for the new field
-        field_type: Type of the new field
-        offset: Byte offset for the field (-1 to append at end)
-
-    Returns: Success/failure message.
-    """
-    return safe_post("add_structure_field", {
-        "structure_name": structure_name,
-        "field_name": field_name,
-        "field_type": field_type,
-        "offset": str(offset)
-    })
-
-
-@mcp.tool()
-def bulk_add_structure_fields(structure_name: str, fields: list) -> str:
-    """
-    Add multiple fields to an existing structure in a single operation.
-
-    Args:
-        structure_name: Name of the structure to modify
-        fields: List of field definitions, each with "name", "type", and optionally "offset"
-
-    Example:
-        bulk_add_structure_fields(
-            structure_name="GameSession",
-            fields=[
-                {"name": "session_id", "type": "int", "offset": "0"},
-                {"name": "player_count", "type": "int", "offset": "4"},
-                {"name": "owner", "type": "Player*", "offset": "8"},
-                {"name": "state", "type": "int", "offset": "16"},
-                {"name": "flags", "type": "uint", "offset": "20"}
-            ]
-        )
-
-    Example - Append fields (no offset specified):
-        bulk_add_structure_fields(
-            structure_name="Config",
-            fields=[
-                {"name": "setting1", "type": "int"},
-                {"name": "setting2", "type": "float"},
-                {"name": "name", "type": "char*"}
-            ]
-        )
-
-    Returns: Summary with success/failure for each field and final structure size.
-    """
-    return safe_post("bulk_add_structure_fields", {
-        "structure_name": structure_name,
-        "fields": json.dumps(fields)
-    })
 
 
 # ============================================================================
@@ -747,24 +572,44 @@ def create_structure(name: str, category_path: str = "", size: int = 0, fields: 
 
 
 @mcp.tool()
-def create_enum(name: str, category_path: str = "", size: int = 4) -> str:
+def create_enum(name: str, category_path: str = "", size: int = 4, values: list = None) -> str:
     """
-    Create a new enum data type.
+    Create a new enum data type, optionally with values.
 
     Args:
         name: Name for the new enum
         category_path: Optional category path (e.g., "/MyTypes")
         size: Size in bytes (1, 2, 4, or 8)
+        values: Optional list of value definitions to add immediately.
+                Each value is a dict with "name" and "value" keys.
 
-    After creation, use add_enum_value() to add values.
+    Example - Create enum with values:
+        create_enum(
+            name="GameState",
+            category_path="/Game",
+            size=4,
+            values=[
+                {"name": "STATE_INIT", "value": 0},
+                {"name": "STATE_RUNNING", "value": 1},
+                {"name": "STATE_PAUSED", "value": 2}
+            ]
+        )
 
     Returns: Success message with the full path, or error if exists.
     """
-    return safe_post("create_enum", {
-        "name": name,
-        "category_path": category_path,
-        "size": str(size)
-    })
+    if values:
+        return safe_post("create_enum_with_values", {
+            "name": name,
+            "category_path": category_path,
+            "size": str(size),
+            "values": json.dumps(values)
+        })
+    else:
+        return safe_post("create_enum", {
+            "name": name,
+            "category_path": category_path,
+            "size": str(size)
+        })
 
 
 @mcp.tool()
@@ -785,25 +630,6 @@ def create_typedef(name: str, base_type: str, category_path: str = "") -> str:
         "name": name,
         "base_type": base_type,
         "category_path": category_path
-    })
-
-
-@mcp.tool()
-def add_enum_value(enum_name: str, value_name: str, value: int) -> str:
-    """
-    Add a value to an existing enum.
-
-    Args:
-        enum_name: Name of the enum to modify
-        value_name: Name for the new enum value
-        value: Numeric value
-
-    Returns: Success/failure message.
-    """
-    return safe_post("add_enum_value", {
-        "enum_name": enum_name,
-        "value_name": value_name,
-        "value": str(value)
     })
 
 
@@ -863,9 +689,6 @@ def create_function_definition(
             category_path="/VTables"
         )
 
-    After creation, use this type in a structure field:
-        add_structure_field("PlayerVTable", "update", "VTable_Update*")
-
     Returns: Success message with signature, or error if exists.
     """
     data = {
@@ -910,16 +733,13 @@ def create_function_definition_from_prototype(prototype: str, category_path: str
 
 
 # ============================================================================
-# BULK OPERATIONS - Use after analyzing a function
+# BULK OPERATIONS - Efficient batch modifications
 # ============================================================================
 
 @mcp.tool()
 def bulk_rename_functions(renames: list) -> str:
     """
     Rename multiple functions in a single operation.
-
-    RECOMMENDED: Use this after analyzing a function to apply all your
-    renaming decisions at once, rather than making individual calls.
 
     Args:
         renames: List of dicts with "address" and "new_name" keys
@@ -936,9 +756,6 @@ def bulk_set_function_prototypes(prototypes: list) -> str:
     """
     Set prototypes for multiple functions in a single operation.
 
-    RECOMMENDED: Use this after analyzing a function to apply all your
-    prototype changes at once.
-
     Args:
         prototypes: List of dicts with "address" and "prototype" keys
                     Example: [{"address": "0x1400010a0", "prototype": "void init_player(Player* p)"},
@@ -953,9 +770,6 @@ def bulk_set_function_prototypes(prototypes: list) -> str:
 def bulk_rename_variables(function_address: str, renames: list) -> str:
     """
     Rename multiple variables within a single function.
-
-    RECOMMENDED: Use this after analyzing a function to apply all your
-    variable naming decisions at once.
 
     Args:
         function_address: Address of the function containing the variables
@@ -975,9 +789,7 @@ def bulk_rename_variables(function_address: str, renames: list) -> str:
 def bulk_set_variable_types(function_address: str, type_changes: list) -> str:
     """
     Set types for multiple variables within a single function.
-
-    RECOMMENDED: Use this after analyzing a function to apply all your
-    type changes at once.
+    If you want to change parameter types, please do it by changing the function's prototype.
 
     Args:
         function_address: Address of the function containing the variables
@@ -1029,6 +841,295 @@ def bulk_retype_structure_fields(structure_name: str, retypes: list) -> str:
         "structure_name": structure_name,
         "retypes": json.dumps(retypes)
     })
+
+
+@mcp.tool()
+def bulk_update_structure_fields(structure_name: str, fields: list) -> str:
+    """
+    Update multiple fields in an existing structure (add or replace at offset).
+
+    Args:
+        structure_name: Name of the structure to modify
+        fields: List of field definitions, each with "name", "type", and optionally "offset"
+
+    Example:
+        bulk_update_structure_fields(
+            structure_name="GameSession",
+            fields=[
+                {"name": "session_id", "type": "int", "offset": "0"},
+                {"name": "player_count", "type": "int", "offset": "4"},
+                {"name": "owner", "type": "Player*", "offset": "8"},
+                {"name": "state", "type": "int", "offset": "16"},
+                {"name": "flags", "type": "uint", "offset": "20"}
+            ]
+        )
+
+    Example - Append fields (no offset specified):
+        bulk_update_structure_fields(
+            structure_name="Config",
+            fields=[
+                {"name": "setting1", "type": "int"},
+                {"name": "setting2", "type": "float"},
+                {"name": "name", "type": "char*"}
+            ]
+        )
+
+    Returns: Summary with success/failure for each field and final structure size.
+    """
+    return safe_post("bulk_update_structure_fields", {
+        "structure_name": structure_name,
+        "fields": json.dumps(fields)
+    })
+
+
+@mcp.tool()
+def bulk_get_xrefs(addresses: list, limit: int = 100) -> str:
+    """
+    Get cross-references for multiple addresses in a single operation.
+
+    Args:
+        addresses: List of dicts with "address" and optionally "direction" (to/from/both)
+                   Example: [{"address": "0x1400010a0", "direction": "both"},
+                            {"address": "0x140001200", "direction": "to"}]
+        limit: Max refs per address (default 100)
+
+    Returns: Combined xref results for all addresses.
+    """
+    return safe_post_json("bulk_get_xrefs", {"addresses": addresses, "limit": limit})
+
+
+@mcp.tool()
+def bulk_rename_data(renames: list) -> str:
+    """
+    Rename multiple data labels at different addresses in a single operation.
+
+    Args:
+        renames: List of dicts with "address" and "new_name" keys
+                 Example: [{"address": "0x1400010a0", "new_name": "g_player_count"},
+                          {"address": "0x140001200", "new_name": "g_session_ptr"}]
+
+    Returns: Summary with success/failure for each rename.
+    """
+    return safe_post("bulk_rename_data", json.dumps(renames))
+
+
+@mcp.tool()
+def bulk_resize_structures(resizes: list) -> str:
+    """
+    Resize multiple structures in a single operation.
+
+    Args:
+        resizes: List of dicts with "structure_name" and "new_size" keys
+                 Example: [{"structure_name": "Player", "new_size": "128"},
+                          {"structure_name": "Session", "new_size": "256"}]
+
+    Returns: Summary with success/failure for each resize.
+    """
+    return safe_post("bulk_resize_structures", json.dumps(resizes))
+
+
+@mcp.tool()
+def bulk_get_structures(names: list) -> str:
+    """
+    Get details for multiple structures in a single operation.
+
+    Args:
+        names: List of structure names to retrieve
+               Example: ["Player", "Session", "GameState"]
+
+    Returns: Combined structure details for all requested structures.
+    """
+    return safe_post("bulk_get_structures", json.dumps(names))
+
+
+@mcp.tool()
+def bulk_add_enum_values(values: list) -> str:
+    """
+    Add multiple values to existing enums in a single operation.
+
+    Args:
+        values: List of dicts with "enum_name", "value_name", and "value" keys
+                Example: [{"enum_name": "GameState", "value_name": "STATE_LOADING", "value": "3"},
+                         {"enum_name": "GameState", "value_name": "STATE_ERROR", "value": "4"}]
+
+    Returns: Summary with success/failure for each addition.
+    """
+    return safe_post("bulk_add_enum_values", json.dumps(values))
+
+
+@mcp.tool()
+def bulk_create_typedefs(typedefs: list) -> str:
+    """
+    Create multiple typedefs in a single operation.
+
+    Args:
+        typedefs: List of dicts with "name", "base_type", and optionally "category_path"
+                  Example: [{"name": "HANDLE", "base_type": "void*"},
+                           {"name": "PlayerPtr", "base_type": "Player*", "category_path": "/Game"}]
+
+    Returns: Summary with success/failure for each typedef.
+    """
+    return safe_post("bulk_create_typedefs", json.dumps(typedefs))
+
+
+@mcp.tool()
+def bulk_set_comments(comments: list) -> str:
+    """
+    Set multiple comments in a single operation.
+
+    Args:
+        comments: List of dicts with "address", "comment", and optionally "type"
+                  type can be "decompiler" (default) or "disassembly"
+                  Example: [{"address": "0x1400010a0", "comment": "Initialize player", "type": "decompiler"},
+                           {"address": "0x140001200", "comment": "Check bounds", "type": "disassembly"}]
+
+    Returns: Summary with success/failure for each comment.
+    """
+    return safe_post("bulk_set_comments", json.dumps(comments))
+
+
+# ============================================================================
+# UNDO/REDO - Cancel or restore actions
+# ============================================================================
+
+@mcp.tool()
+def undo() -> str:
+    """
+    Undo the last action/transaction.
+
+    This cancels the most recent change made to the program database.
+    Use this to revert mistakes or unwanted changes.
+
+    Returns: Success/failure message.
+    """
+    return "\n".join(safe_get("undo"))
+
+
+@mcp.tool()
+def redo() -> str:
+    """
+    Redo the last undone action.
+
+    This restores a change that was previously undone.
+
+    Returns: Success/failure message.
+    """
+    return "\n".join(safe_get("redo"))
+
+
+# ============================================================================
+# COMMIT FUNCTION ANALYSIS - Apply all changes in one operation
+# ============================================================================
+
+@mcp.tool()
+def commit_function_analysis(
+    function_address: str,
+    types: list = None,
+    structures: list = None,
+    new_signature: str = None,
+    variable_changes: list = None,
+    called_functions: list = None
+) -> str:
+    """
+    Apply all analysis changes for a function in a single atomic operation.
+
+    This is the RECOMMENDED way to commit changes after analyzing a function.
+    It ensures all related changes are applied together in a single transaction.
+
+    Args:
+        function_address: Address of the function being analyzed (REQUIRED)
+
+        types: List of enums or function types to create (optional)
+            Each entry has: "kind" ("enum" or "function"), plus type-specific fields
+            Example: [
+                {
+                    "kind": "enum",
+                    "name": "RequestType",
+                    "values": [{"name": "REQ_GET", "value": 0}, {"name": "REQ_POST", "value": 1}]
+                },
+                {
+                    "kind": "function",
+                    "prototype": "void (*Callback)(Session* s, int result)"
+                }
+            ]
+
+       structures: List of structures to create or modify (optional)
+            Each entry has: "name", "category_path" (optional), "size" (optional), "fields"
+            Those defined structures can directly reuse types defined in the 'types' parameter
+            Example: [
+                {
+                    "name": "Session",
+                    "category_path": "/Game",
+                    "fields": [
+                        {"name": "id", "type": "int", "offset": "0"},
+                        {"name": "player", "type": "Player*", "offset": "8"}
+                    ]
+                }
+            ]
+
+        new_signature: New function prototype (optional)
+            Example: "int process_request(Session* session, Request* req)"
+
+        variable_changes: List of variable modifications (optional)
+            Each entry can have: "old_name", "new_name", "new_type"
+            To change parameter variables, please just insert it in the new_signature argument !
+            Defined variable types can directly reuse structures defined by the 'structures' and 'types' parameters
+            Example: [
+                {"old_name": "local_10", "new_name": "session", "new_type": "Session*"},
+                {"old_name": "local_20", "new_type": "int"}
+            ]
+
+
+        called_functions: List of called function prototypes to update (optional)
+            Each entry has: "address" and "prototype"
+            Example: [
+                {"address": "0x140001200", "prototype": "void send_response(Session* s, int code)"}
+            ]
+
+    Returns: Summary of all applied changes with success/failure status for each.
+
+    Example usage:
+        commit_function_analysis(
+            function_address="0x1400010a0",
+            new_signature="int handle_request(Session* session, Request* req)",
+            variable_changes=[
+                {"old_name": "local_10", "new_name": "session", "new_type": "Session*"},
+                {"old_name": "local_18", "new_name": "request", "new_type": "Request*"}
+            ],
+            structures=[
+                {
+                    "name": "Request",
+                    "fields": [
+                        {"name": "type", "type": "int", "offset": "0"},
+                        {"name": "data", "type": "void*", "offset": "8"}
+                    ]
+                }
+            ],
+            called_functions=[
+                {"address": "0x140001500", "prototype": "void log_request(Request* req)"}
+            ]
+        )
+    """
+    payload = {
+        "function_address": function_address
+    }
+
+    if new_signature:
+        payload["new_signature"] = new_signature
+
+    if variable_changes:
+        payload["variable_changes"] = variable_changes
+
+    if structures:
+        payload["structures"] = structures
+
+    if types:
+        payload["types"] = types
+
+    if called_functions:
+        payload["called_functions"] = called_functions
+
+    return safe_post_json("commit_function_analysis", payload)
 
 
 # ============================================================================

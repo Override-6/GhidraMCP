@@ -1,6 +1,7 @@
 package com.lauriewired.handlers;
 
 import com.lauriewired.util.DataTypeUtils;
+import com.lauriewired.util.ThreadUtils;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.program.model.address.Address;
@@ -15,7 +16,6 @@ import ghidra.util.task.ConsoleTaskMonitor;
 import javax.swing.SwingUtilities;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Iterator;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Handler for variable-related operations (rename, set type)
@@ -29,96 +29,6 @@ public class VariableHandler {
     }
 
     /**
-     * Rename a variable within a function
-     */
-    public String renameVariableInFunction(String functionName, String oldVarName, String newVarName) {
-        Program program = programProvider.getCurrentProgram();
-        if (program == null) return "No program loaded";
-
-        DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-
-        Function func = null;
-        for (Function f : program.getFunctionManager().getFunctions(true)) {
-            if (f.getName().equals(functionName)) {
-                func = f;
-                break;
-            }
-        }
-
-        if (func == null) {
-            return "Function not found";
-        }
-
-        DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
-        if (result == null || !result.decompileCompleted()) {
-            return "Decompilation failed";
-        }
-
-        HighFunction highFunction = result.getHighFunction();
-        if (highFunction == null) {
-            return "Decompilation failed (no high function)";
-        }
-
-        LocalSymbolMap localSymbolMap = highFunction.getLocalSymbolMap();
-        if (localSymbolMap == null) {
-            return "Decompilation failed (no local symbol map)";
-        }
-
-        HighSymbol highSymbol = null;
-        Iterator<HighSymbol> symbols = localSymbolMap.getSymbols();
-        while (symbols.hasNext()) {
-            HighSymbol symbol = symbols.next();
-            String symbolName = symbol.getName();
-
-            if (symbolName.equals(oldVarName)) {
-                highSymbol = symbol;
-            }
-            if (symbolName.equals(newVarName)) {
-                return "Error: A variable with name '" + newVarName + "' already exists in this function";
-            }
-        }
-
-        if (highSymbol == null) {
-            return "Variable not found";
-        }
-
-        boolean commitRequired = checkFullCommit(highSymbol, highFunction);
-
-        final HighSymbol finalHighSymbol = highSymbol;
-        final Function finalFunction = func;
-        AtomicBoolean successFlag = new AtomicBoolean(false);
-
-        try {
-            SwingUtilities.invokeAndWait(() -> {
-                int tx = program.startTransaction("Rename variable");
-                try {
-                    if (commitRequired) {
-                        HighFunctionDBUtil.commitParamsToDatabase(highFunction, false,
-                                HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, finalFunction.getSignatureSource());
-                    }
-                    HighFunctionDBUtil.updateDBVariable(
-                            finalHighSymbol,
-                            newVarName,
-                            null,
-                            SourceType.USER_DEFINED
-                    );
-                    successFlag.set(true);
-                } catch (Exception e) {
-                    Msg.error(this, "Failed to rename variable", e);
-                } finally {
-                    successFlag.set(program.endTransaction(tx, true));
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            String errorMsg = "Failed to execute rename on Swing thread: " + e.getMessage();
-            Msg.error(this, errorMsg, e);
-            return errorMsg;
-        }
-        return successFlag.get() ? "Variable renamed" : "Failed to rename variable";
-    }
-
-    /**
      * Rename data at a specific address
      */
     public void renameDataAtAddress(String addressStr, String newName) {
@@ -126,7 +36,7 @@ public class VariableHandler {
         if (program == null) return;
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Rename data");
                 try {
                     Address addr = program.getAddressFactory().getAddress(addressStr);
@@ -153,84 +63,64 @@ public class VariableHandler {
     }
 
     /**
-     * Set a local variable's type
+     * Bulk rename data labels at multiple addresses.
+     *
+     * @param renames List of {address, new_name} pairs
+     * @return Result message with success/failure for each rename
      */
-    public boolean setLocalVariableType(String functionAddrStr, String variableName, String newType) {
+    public String bulkRenameData(java.util.List<java.util.Map<String, String>> renames) {
         Program program = programProvider.getCurrentProgram();
-        if (program == null) return false;
-        if (functionAddrStr == null || functionAddrStr.isEmpty() ||
-                variableName == null || variableName.isEmpty() ||
-                newType == null || newType.isEmpty()) {
-            return false;
-        }
+        if (program == null) return "No program loaded";
+        if (renames == null || renames.isEmpty()) return "Rename list is required";
 
-        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder result = new StringBuilder();
+        final int[] successCount = {0};
 
         try {
-            SwingUtilities.invokeAndWait(() ->
-                    applyVariableType(program, functionAddrStr, variableName, newType, success));
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk rename data");
+                try {
+                    ghidra.program.model.symbol.SymbolTable symTable = program.getSymbolTable();
+                    Listing listing = program.getListing();
+
+                    for (java.util.Map<String, String> rename : renames) {
+                        String addressStr = rename.get("address");
+                        String newName = rename.get("new_name");
+
+                        if (addressStr == null || newName == null) {
+                            result.append("SKIP: Invalid entry (missing address or new_name)\n");
+                            continue;
+                        }
+
+                        try {
+                            Address addr = program.getAddressFactory().getAddress(addressStr);
+                            ghidra.program.model.symbol.Symbol symbol = symTable.getPrimarySymbol(addr);
+
+                            if (symbol != null) {
+                                symbol.setName(newName, SourceType.USER_DEFINED);
+                                result.append("OK: ").append(addressStr).append(" -> ").append(newName).append("\n");
+                                successCount[0]++;
+                            } else {
+                                // Try to create a new label
+                                symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
+                                result.append("OK (created): ").append(addressStr).append(" -> ").append(newName).append("\n");
+                                successCount[0]++;
+                            }
+                        } catch (Exception e) {
+                            result.append("FAIL: ").append(addressStr).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+            });
         } catch (InterruptedException | InvocationTargetException e) {
-            Msg.error(this, "Failed to execute set variable type on Swing thread", e);
+            Msg.error(this, "Failed to bulk rename data on Swing thread", e);
+            return "Error: " + e.getMessage();
         }
 
-        return success.get();
-    }
-
-    /**
-     * Helper method that performs the actual variable type change
-     */
-    private void applyVariableType(Program program, String functionAddrStr,
-                                   String variableName, String newType, AtomicBoolean success) {
-        try {
-            Address addr = program.getAddressFactory().getAddress(functionAddrStr);
-            Function func = getFunctionForAddress(program, addr);
-
-            if (func == null) {
-                Msg.error(this, "Could not find function at address: " + functionAddrStr);
-                return;
-            }
-
-            DecompileResults results = decompileFunction(func, program);
-            if (results == null || !results.decompileCompleted()) {
-                return;
-            }
-
-            HighFunction highFunction = results.getHighFunction();
-            if (highFunction == null) {
-                Msg.error(this, "No high function available");
-                return;
-            }
-
-            HighSymbol symbol = findSymbolByName(highFunction, variableName);
-            if (symbol == null) {
-                Msg.error(this, "Could not find variable '" + variableName + "' in decompiled function");
-                return;
-            }
-
-            HighVariable highVar = symbol.getHighVariable();
-            if (highVar == null) {
-                Msg.error(this, "No HighVariable found for symbol: " + variableName);
-                return;
-            }
-
-            Msg.info(this, "Found high variable for: " + variableName +
-                    " with current type " + highVar.getDataType().getName());
-
-            DataTypeManager dtm = program.getDataTypeManager();
-            DataType dataType = DataTypeUtils.resolveDataType(dtm, newType);
-
-            if (dataType == null) {
-                Msg.error(this, "Could not resolve data type: " + newType);
-                return;
-            }
-
-            Msg.info(this, "Using data type: " + dataType.getName() + " for variable " + variableName);
-
-            updateVariableType(program, symbol, dataType, success);
-
-        } catch (Exception e) {
-            Msg.error(this, "Error setting variable type: " + e.getMessage());
-        }
+        result.insert(0, "Bulk rename data completed. Success: " + successCount[0] + "/" + renames.size() + "\n");
+        return result.toString();
     }
 
     /**
@@ -263,28 +153,6 @@ public class VariableHandler {
         }
 
         return results;
-    }
-
-    /**
-     * Apply the type update in a transaction
-     */
-    private void updateVariableType(Program program, HighSymbol symbol, DataType dataType, AtomicBoolean success) {
-        int tx = program.startTransaction("Set variable type");
-        try {
-            HighFunctionDBUtil.updateDBVariable(
-                    symbol,
-                    symbol.getName(),
-                    dataType,
-                    SourceType.USER_DEFINED
-            );
-
-            success.set(true);
-            Msg.info(this, "Successfully set variable type using HighFunctionDBUtil");
-        } catch (Exception e) {
-            Msg.error(this, "Error setting variable type: " + e.getMessage());
-        } finally {
-            program.endTransaction(tx, success.get());
-        }
     }
 
     /**
@@ -347,7 +215,7 @@ public class VariableHandler {
         final int[] successCount = {0};
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Bulk rename variables");
                 try {
                     Address addr = program.getAddressFactory().getAddress(functionAddress);
@@ -442,7 +310,7 @@ public class VariableHandler {
         final int[] successCount = {0};
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction("Bulk set variable types");
                 try {
                     Address addr = program.getAddressFactory().getAddress(functionAddress);
@@ -482,7 +350,7 @@ public class VariableHandler {
                             continue;
                         }
 
-                        DataType dataType = DataTypeUtils.resolveDataType(dtm, newTypeName);
+                        DataType dataType = DataTypeUtils.resolveDataType(dtm, newTypeName, programProvider.getTool());
                         if (dataType == null) {
                             result.append("FAIL: Could not resolve type: ").append(newTypeName).append("\n");
                             continue;

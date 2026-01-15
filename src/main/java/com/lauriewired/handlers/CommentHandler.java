@@ -1,5 +1,6 @@
 package com.lauriewired.handlers;
 
+import com.lauriewired.util.ThreadUtils;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.listing.Program;
@@ -7,7 +8,10 @@ import ghidra.util.Msg;
 
 import javax.swing.SwingUtilities;
 import java.lang.reflect.InvocationTargetException;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Handler for comment-related operations (decompiler and disassembly comments)
@@ -45,7 +49,7 @@ public class CommentHandler {
         AtomicBoolean success = new AtomicBoolean(false);
 
         try {
-            SwingUtilities.invokeAndWait(() -> {
+            ThreadUtils.invokeAndWaitSafe(() -> {
                 int tx = program.startTransaction(transactionName);
                 try {
                     Address addr = program.getAddressFactory().getAddress(addressStr);
@@ -62,6 +66,64 @@ public class CommentHandler {
         }
 
         return success.get();
+    }
+
+    /**
+     * Set multiple comments in a single operation.
+     *
+     * @param comments List of {address, comment, type} entries.
+     *                 type can be "decompiler" (PRE_COMMENT) or "disassembly" (EOL_COMMENT)
+     * @return Result message with success/failure for each comment
+     */
+    public String bulkSetComments(List<Map<String, String>> comments) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (comments == null || comments.isEmpty()) return "Comments list is required";
+
+        AtomicReference<String> result = new AtomicReference<>();
+        StringBuilder sb = new StringBuilder();
+
+        try {
+            ThreadUtils.invokeAndWaitSafe(() -> {
+                int tx = program.startTransaction("Bulk set comments");
+                int successCount = 0;
+                try {
+                    for (Map<String, String> entry : comments) {
+                        String addressStr = entry.get("address");
+                        String comment = entry.get("comment");
+                        String type = entry.getOrDefault("type", "decompiler");
+
+                        if (addressStr == null || comment == null) {
+                            sb.append("SKIP: Missing address or comment\n");
+                            continue;
+                        }
+
+                        int commentType = "disassembly".equalsIgnoreCase(type)
+                                ? CodeUnit.EOL_COMMENT
+                                : CodeUnit.PRE_COMMENT;
+
+                        try {
+                            Address addr = program.getAddressFactory().getAddress(addressStr);
+                            program.getListing().setComment(addr, commentType, comment);
+                            sb.append("OK: ").append(addressStr).append(" [").append(type).append("]\n");
+                            successCount++;
+                        } catch (Exception e) {
+                            sb.append("FAIL: ").append(addressStr).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+
+                    sb.insert(0, "Bulk set comments completed. Success: " + successCount + "/" + comments.size() + "\n");
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+                result.set(sb.toString());
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk set comments on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        return result.get();
     }
 
 }
