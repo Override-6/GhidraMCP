@@ -330,4 +330,191 @@ public class VariableHandler {
         return false;
     }
 
+    /**
+     * Bulk rename variables within a single function.
+     *
+     * @param functionAddress Address of the function
+     * @param renames List of {old_name, new_name} pairs
+     * @return Result message with success/failure for each rename
+     */
+    public String bulkRenameVariables(String functionAddress, java.util.List<java.util.Map<String, String>> renames) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionAddress == null || functionAddress.isEmpty()) return "Function address is required";
+        if (renames == null || renames.isEmpty()) return "Rename list is required";
+
+        StringBuilder result = new StringBuilder();
+        final int[] successCount = {0};
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Bulk rename variables");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(functionAddress);
+                    Function func = getFunctionForAddress(program, addr);
+
+                    if (func == null) {
+                        result.append("Function not found at: ").append(functionAddress);
+                        return;
+                    }
+
+                    DecompileResults decompResults = decompileFunction(func, program);
+                    if (decompResults == null || !decompResults.decompileCompleted()) {
+                        result.append("Decompilation failed for function at: ").append(functionAddress);
+                        return;
+                    }
+
+                    HighFunction highFunction = decompResults.getHighFunction();
+                    if (highFunction == null) {
+                        result.append("No high function available");
+                        return;
+                    }
+
+                    boolean commitRequired = false;
+
+                    for (java.util.Map<String, String> rename : renames) {
+                        String oldName = rename.get("old_name");
+                        String newName = rename.get("new_name");
+
+                        if (oldName == null || newName == null) {
+                            result.append("SKIP: Invalid entry (missing old_name or new_name)\n");
+                            continue;
+                        }
+
+                        HighSymbol symbol = findSymbolByName(highFunction, oldName);
+                        if (symbol == null) {
+                            result.append("FAIL: Variable not found: ").append(oldName).append("\n");
+                            continue;
+                        }
+
+                        // Check if any rename requires commit
+                        if (!commitRequired) {
+                            commitRequired = checkFullCommit(symbol, highFunction);
+                        }
+
+                        try {
+                            HighFunctionDBUtil.updateDBVariable(
+                                    symbol,
+                                    newName,
+                                    null,
+                                    SourceType.USER_DEFINED
+                            );
+                            result.append("OK: ").append(oldName).append(" -> ").append(newName).append("\n");
+                            successCount[0]++;
+                        } catch (Exception e) {
+                            result.append("FAIL: ").append(oldName).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+
+                    if (commitRequired) {
+                        HighFunctionDBUtil.commitParamsToDatabase(highFunction, false,
+                                HighFunctionDBUtil.ReturnCommitOption.NO_COMMIT, func.getSignatureSource());
+                    }
+                } catch (Exception e) {
+                    result.append("Error: ").append(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+            });
+        } catch (InterruptedException | java.lang.reflect.InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk rename variables on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        result.insert(0, "Bulk rename completed. Success: " + successCount[0] + "/" + renames.size() + "\n");
+        return result.toString();
+    }
+
+    /**
+     * Bulk set variable types within a single function.
+     *
+     * @param functionAddress Address of the function
+     * @param typeChanges List of {variable_name, new_type} pairs
+     * @return Result message with success/failure for each type change
+     */
+    public String bulkSetVariableTypes(String functionAddress, java.util.List<java.util.Map<String, String>> typeChanges) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (functionAddress == null || functionAddress.isEmpty()) return "Function address is required";
+        if (typeChanges == null || typeChanges.isEmpty()) return "Type change list is required";
+
+        StringBuilder result = new StringBuilder();
+        final int[] successCount = {0};
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Bulk set variable types");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(functionAddress);
+                    Function func = getFunctionForAddress(program, addr);
+
+                    if (func == null) {
+                        result.append("Function not found at: ").append(functionAddress);
+                        return;
+                    }
+
+                    DecompileResults decompResults = decompileFunction(func, program);
+                    if (decompResults == null || !decompResults.decompileCompleted()) {
+                        result.append("Decompilation failed for function at: ").append(functionAddress);
+                        return;
+                    }
+
+                    HighFunction highFunction = decompResults.getHighFunction();
+                    if (highFunction == null) {
+                        result.append("No high function available");
+                        return;
+                    }
+
+                    DataTypeManager dtm = program.getDataTypeManager();
+
+                    for (java.util.Map<String, String> change : typeChanges) {
+                        String varName = change.get("variable_name");
+                        String newTypeName = change.get("new_type");
+
+                        if (varName == null || newTypeName == null) {
+                            result.append("SKIP: Invalid entry (missing variable_name or new_type)\n");
+                            continue;
+                        }
+
+                        HighSymbol symbol = findSymbolByName(highFunction, varName);
+                        if (symbol == null) {
+                            result.append("FAIL: Variable not found: ").append(varName).append("\n");
+                            continue;
+                        }
+
+                        DataType dataType = DataTypeUtils.resolveDataType(dtm, newTypeName);
+                        if (dataType == null) {
+                            result.append("FAIL: Could not resolve type: ").append(newTypeName).append("\n");
+                            continue;
+                        }
+
+                        try {
+                            HighFunctionDBUtil.updateDBVariable(
+                                    symbol,
+                                    symbol.getName(),
+                                    dataType,
+                                    SourceType.USER_DEFINED
+                            );
+                            result.append("OK: ").append(varName).append(" -> ").append(newTypeName).append("\n");
+                            successCount[0]++;
+                        } catch (Exception e) {
+                            result.append("FAIL: ").append(varName).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+                } catch (Exception e) {
+                    result.append("Error: ").append(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+            });
+        } catch (InterruptedException | java.lang.reflect.InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk set variable types on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        result.insert(0, "Bulk type change completed. Success: " + successCount[0] + "/" + typeChanges.size() + "\n");
+        return result.toString();
+    }
+
 }
+

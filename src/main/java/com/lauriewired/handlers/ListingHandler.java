@@ -201,4 +201,50 @@ public class ListingHandler {
         return typeName.contains("string") || typeName.contains("char") || typeName.equals("unicode");
     }
 
+    /**
+     * Get the base address of the binary (image base).
+     * Returns detailed information about the binary's memory layout.
+     */
+    public String getBinaryInfo() {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        StringBuilder sb = new StringBuilder();
+
+        // Get image base
+        ghidra.program.model.address.Address imageBase = program.getImageBase();
+        sb.append("Image Base: ").append(imageBase).append("\n");
+
+        // Get min/max addresses
+        ghidra.program.model.address.Address minAddr = program.getMinAddress();
+        ghidra.program.model.address.Address maxAddr = program.getMaxAddress();
+        sb.append("Min Address: ").append(minAddr).append("\n");
+        sb.append("Max Address: ").append(maxAddr).append("\n");
+
+        // Get program name and path
+        sb.append("Program Name: ").append(program.getName()).append("\n");
+        sb.append("Executable Path: ").append(program.getExecutablePath()).append("\n");
+
+        // Get language/architecture info
+        sb.append("Language: ").append(program.getLanguageID()).append("\n");
+        sb.append("Compiler: ").append(program.getCompilerSpec().getCompilerSpecID()).append("\n");
+
+        // Get pointer size (useful for understanding architecture)
+        int pointerSize = program.getDataTypeManager().getDataOrganization().getPointerSize();
+        sb.append("Pointer Size: ").append(pointerSize).append(" bytes (").append(pointerSize * 8).append("-bit)\n");
+
+        // Get memory size
+        long memorySize = 0;
+        for (MemoryBlock block : program.getMemory().getBlocks()) {
+            memorySize += block.getSize();
+        }
+        sb.append("Total Memory Size: ").append(memorySize).append(" bytes\n");
+
+        // Get number of functions
+        int funcCount = program.getFunctionManager().getFunctionCount();
+        sb.append("Function Count: ").append(funcCount).append("\n");
+
+        return sb.toString();
+    }
+
 }

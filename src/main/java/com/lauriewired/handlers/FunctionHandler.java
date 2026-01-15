@@ -71,7 +71,7 @@ public class FunctionHandler {
                 DecompileResults result =
                         decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
                 if (result != null && result.decompileCompleted()) {
-                    return result.getDecompiledFunction().getC();
+                    return formatDecompilationResult(func, result.getDecompiledFunction().getC());
                 } else {
                     return "Decompilation failed";
                 }
@@ -98,7 +98,7 @@ public class FunctionHandler {
             DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
 
             return (result != null && result.decompileCompleted())
-                    ? result.getDecompiledFunction().getC()
+                    ? formatDecompilationResult(func, result.getDecompiledFunction().getC())
                     : "Decompilation failed";
         } catch (Exception e) {
             return "Error decompiling function: " + e.getMessage();
@@ -432,4 +432,156 @@ public class FunctionHandler {
         return results;
     }
 
+    /**
+     * Format decompilation result with function metadata header
+     */
+    private String formatDecompilationResult(Function func, String decompiledCode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("// ============================================================\n");
+        sb.append("// Function: ").append(func.getName()).append("\n");
+        sb.append("// Address: ").append(func.getEntryPoint()).append("\n");
+        sb.append("// Signature: ").append(func.getSignature().getPrototypeString()).append("\n");
+        sb.append("// Body: ").append(func.getBody().getMinAddress())
+                .append(" - ").append(func.getBody().getMaxAddress()).append("\n");
+        sb.append("// ============================================================\n\n");
+        sb.append(decompiledCode);
+        return sb.toString();
+    }
+
+    /**
+     * Bulk rename functions by address.
+     *
+     * @param renames List of {address, new_name} pairs
+     * @return Result message with success/failure for each rename
+     */
+    public String bulkRenameFunctions(List<java.util.Map<String, String>> renames) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (renames == null || renames.isEmpty()) return "Rename list is required";
+
+        StringBuilder result = new StringBuilder();
+        final int[] successCount = {0};
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Bulk rename functions");
+                try {
+                    for (java.util.Map<String, String> rename : renames) {
+                        String addressStr = rename.get("address");
+                        String newName = rename.get("new_name");
+
+                        if (addressStr == null || newName == null) {
+                            result.append("SKIP: Invalid entry (missing address or new_name)\n");
+                            continue;
+                        }
+
+                        try {
+                            Address addr = program.getAddressFactory().getAddress(addressStr);
+                            Function func = getFunctionForAddress(program, addr);
+
+                            if (func == null) {
+                                result.append("FAIL: No function at ").append(addressStr).append("\n");
+                                continue;
+                            }
+
+                            String oldName = func.getName();
+                            func.setName(newName, SourceType.USER_DEFINED);
+                            result.append("OK: ").append(oldName).append(" @ ").append(addressStr)
+                                    .append(" -> ").append(newName).append("\n");
+                            successCount[0]++;
+                        } catch (Exception e) {
+                            result.append("FAIL: ").append(addressStr).append(" - ").append(e.getMessage()).append("\n");
+                        }
+                    }
+                } finally {
+                    program.endTransaction(tx, true);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk rename functions on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        result.insert(0, "Bulk rename completed. Success: " + successCount[0] + "/" + renames.size() + "\n");
+        return result.toString();
+    }
+
+    /**
+     * Bulk set function prototypes.
+     *
+     * @param prototypes List of {address, prototype} pairs
+     * @return Result message with success/failure for each operation
+     */
+    public String bulkSetFunctionPrototypes(List<java.util.Map<String, String>> prototypes) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (prototypes == null || prototypes.isEmpty()) return "Prototype list is required";
+
+        StringBuilder result = new StringBuilder();
+        final int[] successCount = {0};
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                for (java.util.Map<String, String> proto : prototypes) {
+                    String addressStr = proto.get("address");
+                    String prototype = proto.get("prototype");
+
+                    if (addressStr == null || prototype == null) {
+                        result.append("SKIP: Invalid entry (missing address or prototype)\n");
+                        continue;
+                    }
+
+                    try {
+                        Address addr = program.getAddressFactory().getAddress(addressStr);
+                        Function func = getFunctionForAddress(program, addr);
+
+                        if (func == null) {
+                            result.append("FAIL: No function at ").append(addressStr).append("\n");
+                            continue;
+                        }
+
+                        // Apply prototype in its own transaction
+                        int tx = program.startTransaction("Set prototype for " + addressStr);
+                        try {
+                            DataTypeManager dtm = program.getDataTypeManager();
+                            ghidra.app.services.DataTypeManagerService dtms =
+                                    tool.getService(ghidra.app.services.DataTypeManagerService.class);
+                            ghidra.app.util.parser.FunctionSignatureParser parser =
+                                    new ghidra.app.util.parser.FunctionSignatureParser(dtm, dtms);
+
+                            ghidra.program.model.data.FunctionDefinitionDataType sig = parser.parse(null, prototype);
+
+                            if (sig == null) {
+                                result.append("FAIL: Could not parse prototype for ").append(addressStr).append("\n");
+                                continue;
+                            }
+
+                            ghidra.app.cmd.function.ApplyFunctionSignatureCmd cmd =
+                                    new ghidra.app.cmd.function.ApplyFunctionSignatureCmd(
+                                            addr, sig, SourceType.USER_DEFINED);
+
+                            if (cmd.applyTo(program, new ConsoleTaskMonitor())) {
+                                result.append("OK: ").append(func.getName()).append(" @ ").append(addressStr).append("\n");
+                                successCount[0]++;
+                            } else {
+                                result.append("FAIL: ").append(addressStr).append(" - ").append(cmd.getStatusMsg()).append("\n");
+                            }
+                        } finally {
+                            program.endTransaction(tx, true);
+                        }
+                    } catch (Exception e) {
+                        result.append("FAIL: ").append(addressStr).append(" - ").append(e.getMessage()).append("\n");
+                    }
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            Msg.error(this, "Failed to bulk set prototypes on Swing thread", e);
+            return "Error: " + e.getMessage();
+        }
+
+        result.insert(0, "Bulk prototype set completed. Success: " + successCount[0] + "/" + prototypes.size() + "\n");
+        return result.toString();
+    }
+
 }
+

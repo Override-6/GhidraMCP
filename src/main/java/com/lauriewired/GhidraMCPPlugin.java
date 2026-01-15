@@ -19,6 +19,9 @@ import com.lauriewired.util.HttpUtils;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @PluginInfo(
@@ -33,7 +36,7 @@ public class GhidraMCPPlugin extends Plugin {
     private HttpServer server;
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
-    private static final int DEFAULT_PORT = 8080;
+    private static final int DEFAULT_PORT = 8081;
 
     // Handlers
     private ListingHandler listingHandler;
@@ -41,6 +44,8 @@ public class GhidraMCPPlugin extends Plugin {
     private VariableHandler variableHandler;
     private ReferenceHandler referenceHandler;
     private CommentHandler commentHandler;
+    private SearchHandler searchHandler;
+    private DataTypeHandler dataTypeHandler;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -73,6 +78,8 @@ public class GhidraMCPPlugin extends Plugin {
         variableHandler = new VariableHandler(programProvider);
         referenceHandler = new ReferenceHandler(programProvider);
         commentHandler = new CommentHandler(programProvider);
+        searchHandler = new SearchHandler(programProvider);
+        dataTypeHandler = new DataTypeHandler(programProvider);
     }
 
     private void startServer() throws IOException {
@@ -95,6 +102,9 @@ public class GhidraMCPPlugin extends Plugin {
         registerVariableEndpoints();
         registerReferenceEndpoints();
         registerCommentEndpoints();
+        registerSearchEndpoints();
+        registerDataTypeEndpoints();
+        registerBulkEndpoints();
 
         server.setExecutor(null);
         new Thread(() -> {
@@ -168,6 +178,10 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             HttpUtils.sendResponse(exchange, listingHandler.listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/get_binary_info", exchange -> {
+            HttpUtils.sendResponse(exchange, listingHandler.getBinaryInfo());
         });
     }
 
@@ -342,6 +356,377 @@ public class GhidraMCPPlugin extends Plugin {
             boolean success = commentHandler.setDisassemblyComment(address, comment);
             HttpUtils.sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
+    }
+
+    private void registerSearchEndpoints() {
+        // Search functions by regex pattern (RAG for functions)
+        server.createContext("/search_functions_by_regex", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            String pattern = qparams.get("pattern");
+            int offset = HttpUtils.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
+            HttpUtils.sendResponse(exchange, searchHandler.searchFunctionsByRegex(pattern, offset, limit));
+        });
+
+        // Search strings by regex pattern (RAG for strings)
+        server.createContext("/search_strings_by_regex", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            String pattern = qparams.get("pattern");
+            int offset = HttpUtils.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
+            HttpUtils.sendResponse(exchange, searchHandler.searchStringsByRegex(pattern, offset, limit));
+        });
+
+        // Search data types by regex pattern (RAG for data types)
+        server.createContext("/search_data_types_by_regex", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            String pattern = qparams.get("pattern");
+            int offset = HttpUtils.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
+            HttpUtils.sendResponse(exchange, searchHandler.searchDataTypesByRegex(pattern, offset, limit));
+        });
+
+        // List all structures
+        server.createContext("/list_structures", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            int offset = HttpUtils.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
+            HttpUtils.sendResponse(exchange, searchHandler.listStructures(offset, limit));
+        });
+
+        // Get structure details
+        server.createContext("/get_structure", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            String name = qparams.get("name");
+            HttpUtils.sendResponse(exchange, searchHandler.getStructureDetails(name));
+        });
+
+        // List all enums
+        server.createContext("/list_enums", exchange -> {
+            Map<String, String> qparams = HttpUtils.parseQueryParams(exchange);
+            int offset = HttpUtils.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = HttpUtils.parseIntOrDefault(qparams.get("limit"), 100);
+            HttpUtils.sendResponse(exchange, searchHandler.listEnums(offset, limit));
+        });
+    }
+
+    private void registerDataTypeEndpoints() {
+        // Rename structure field
+        server.createContext("/rename_structure_field", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String oldFieldName = params.get("old_field_name");
+            String newFieldName = params.get("new_field_name");
+            HttpUtils.sendResponse(exchange, dataTypeHandler.renameStructureField(structName, oldFieldName, newFieldName));
+        });
+
+        // Retype structure field
+        server.createContext("/retype_structure_field", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String fieldName = params.get("field_name");
+            String newType = params.get("new_type");
+            HttpUtils.sendResponse(exchange, dataTypeHandler.retypeStructureField(structName, fieldName, newType));
+        });
+
+        // Create new structure
+        server.createContext("/create_structure", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String name = params.get("name");
+            String categoryPath = params.get("category_path");
+            int size = HttpUtils.parseIntOrDefault(params.get("size"), 0);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createStructure(name, categoryPath, size));
+        });
+
+        // Create new structure with fields
+        server.createContext("/create_structure_with_fields", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String name = params.get("name");
+            String categoryPath = params.get("category_path");
+            int size = HttpUtils.parseIntOrDefault(params.get("size"), 0);
+            String fieldsJson = params.get("fields");
+            List<Map<String, String>> fields = parseJsonArray(fieldsJson);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createStructureWithFields(name, categoryPath, size, fields));
+        });
+
+        // Bulk add structure fields
+        server.createContext("/bulk_add_structure_fields", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String fieldsJson = params.get("fields");
+            List<Map<String, String>> fields = parseJsonArray(fieldsJson);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.bulkAddStructureFields(structName, fields));
+        });
+
+        // Create new enum
+        server.createContext("/create_enum", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String name = params.get("name");
+            String categoryPath = params.get("category_path");
+            int size = HttpUtils.parseIntOrDefault(params.get("size"), 4);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createEnum(name, categoryPath, size));
+        });
+
+        // Create new typedef
+        server.createContext("/create_typedef", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String name = params.get("name");
+            String baseType = params.get("base_type");
+            String categoryPath = params.get("category_path");
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createTypedef(name, baseType, categoryPath));
+        });
+
+        // Add structure field
+        server.createContext("/add_structure_field", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String fieldName = params.get("field_name");
+            String fieldType = params.get("field_type");
+            int offset = HttpUtils.parseIntOrDefault(params.get("offset"), -1);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.addStructureField(structName, fieldName, fieldType, offset));
+        });
+
+        // Add enum value
+        server.createContext("/add_enum_value", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String enumName = params.get("enum_name");
+            String valueName = params.get("value_name");
+            long value = Long.parseLong(params.getOrDefault("value", "0"));
+            HttpUtils.sendResponse(exchange, dataTypeHandler.addEnumValue(enumName, valueName, value));
+        });
+
+        // Resize structure
+        server.createContext("/resize_structure", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            int newSize = HttpUtils.parseIntOrDefault(params.get("new_size"), 0);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.resizeStructure(structName, newSize));
+        });
+
+        // Create function definition
+        server.createContext("/create_function_definition", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String name = params.get("name");
+            String returnType = params.get("return_type");
+            String categoryPath = params.get("category_path");
+            String paramTypesJson = params.get("parameter_types");
+            String paramNamesJson = params.get("parameter_names");
+
+            List<String> paramTypes = parseJsonStringArray(paramTypesJson);
+            List<String> paramNames = parseJsonStringArray(paramNamesJson);
+
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createFunctionDefinition(
+                    name, returnType, paramTypes, paramNames, categoryPath));
+        });
+
+        // Create function definition from prototype
+        server.createContext("/create_function_definition_from_prototype", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String prototype = params.get("prototype");
+            String categoryPath = params.get("category_path");
+            HttpUtils.sendResponse(exchange, dataTypeHandler.createFunctionDefinitionFromPrototype(prototype, categoryPath));
+        });
+    }
+
+    private void registerBulkEndpoints() {
+        // Bulk rename functions
+        server.createContext("/bulk_rename_functions", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            List<Map<String, String>> renames = parseJsonArray(body);
+            HttpUtils.sendResponse(exchange, functionHandler.bulkRenameFunctions(renames));
+        });
+
+        // Bulk set function prototypes
+        server.createContext("/bulk_set_function_prototypes", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            List<Map<String, String>> prototypes = parseJsonArray(body);
+            HttpUtils.sendResponse(exchange, functionHandler.bulkSetFunctionPrototypes(prototypes));
+        });
+
+        // Bulk rename variables
+        server.createContext("/bulk_rename_variables", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String functionAddress = params.get("function_address");
+            String renamesJson = params.get("renames");
+            List<Map<String, String>> renames = parseJsonArray(renamesJson);
+            HttpUtils.sendResponse(exchange, variableHandler.bulkRenameVariables(functionAddress, renames));
+        });
+
+        // Bulk set variable types
+        server.createContext("/bulk_set_variable_types", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String functionAddress = params.get("function_address");
+            String typesJson = params.get("type_changes");
+            List<Map<String, String>> typeChanges = parseJsonArray(typesJson);
+            HttpUtils.sendResponse(exchange, variableHandler.bulkSetVariableTypes(functionAddress, typeChanges));
+        });
+
+        // Bulk rename structure fields
+        server.createContext("/bulk_rename_structure_fields", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String renamesJson = params.get("renames");
+            List<Map<String, String>> renames = parseJsonArray(renamesJson);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.bulkRenameStructureFields(structName, renames));
+        });
+
+        // Bulk retype structure fields
+        server.createContext("/bulk_retype_structure_fields", exchange -> {
+            Map<String, String> params = HttpUtils.parsePostParams(exchange);
+            String structName = params.get("structure_name");
+            String retypesJson = params.get("retypes");
+            List<Map<String, String>> retypes = parseJsonArray(retypesJson);
+            HttpUtils.sendResponse(exchange, dataTypeHandler.bulkRetypeStructureFields(structName, retypes));
+        });
+    }
+
+    /**
+     * Simple JSON array parser for bulk operations.
+     * Expects format: [{"key1":"val1","key2":"val2"},{"key1":"val3","key2":"val4"}]
+     */
+    private List<Map<String, String>> parseJsonArray(String json) {
+        List<Map<String, String>> result = new ArrayList<>();
+        if (json == null || json.isEmpty()) return result;
+
+        // Remove whitespace and outer brackets
+        json = json.trim();
+        if (json.startsWith("[")) json = json.substring(1);
+        if (json.endsWith("]")) json = json.substring(0, json.length() - 1);
+
+        if (json.isEmpty()) return result;
+
+        // Split by },{ to get individual objects
+        int braceDepth = 0;
+        int start = 0;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '{') braceDepth++;
+            else if (c == '}') {
+                braceDepth--;
+                if (braceDepth == 0) {
+                    String objStr = json.substring(start, i + 1).trim();
+                    Map<String, String> obj = parseJsonObject(objStr);
+                    if (!obj.isEmpty()) result.add(obj);
+                    start = i + 1;
+                    // Skip comma
+                    while (start < json.length() && (json.charAt(start) == ',' || json.charAt(start) == ' ')) {
+                        start++;
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Simple JSON object parser.
+     * Expects format: {"key1":"val1","key2":"val2"}
+     */
+    private Map<String, String> parseJsonObject(String json) {
+        Map<String, String> result = new HashMap<>();
+        if (json == null || json.isEmpty()) return result;
+
+        // Remove outer braces
+        json = json.trim();
+        if (json.startsWith("{")) json = json.substring(1);
+        if (json.endsWith("}")) json = json.substring(0, json.length() - 1);
+
+        // Parse key-value pairs
+        boolean inQuotes = false;
+        boolean inKey = true;
+        StringBuilder key = new StringBuilder();
+        StringBuilder value = new StringBuilder();
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (!inQuotes) {
+                if (c == ':') {
+                    inKey = false;
+                    continue;
+                }
+                if (c == ',') {
+                    if (key.length() > 0) {
+                        result.put(key.toString().trim(), value.toString().trim());
+                    }
+                    key = new StringBuilder();
+                    value = new StringBuilder();
+                    inKey = true;
+                    continue;
+                }
+                if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
+            }
+
+            if (inKey) {
+                key.append(c);
+            } else {
+                value.append(c);
+            }
+        }
+
+        // Don't forget the last pair
+        if (key.length() > 0) {
+            result.put(key.toString().trim(), value.toString().trim());
+        }
+
+        return result;
+    }
+
+    /**
+     * Simple JSON string array parser.
+     * Expects format: ["val1","val2","val3"]
+     */
+    private List<String> parseJsonStringArray(String json) {
+        List<String> result = new ArrayList<>();
+        if (json == null || json.isEmpty()) return result;
+
+        // Remove whitespace and outer brackets
+        json = json.trim();
+        if (json.startsWith("[")) json = json.substring(1);
+        if (json.endsWith("]")) json = json.substring(0, json.length() - 1);
+
+        if (json.isEmpty()) return result;
+
+        // Parse string values
+        boolean inQuotes = false;
+        StringBuilder current = new StringBuilder();
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (!inQuotes) {
+                if (c == ',') {
+                    String value = current.toString().trim();
+                    if (!value.isEmpty()) {
+                        result.add(value);
+                    }
+                    current = new StringBuilder();
+                    continue;
+                }
+                if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
+            }
+
+            current.append(c);
+        }
+
+        // Don't forget the last value
+        String value = current.toString().trim();
+        if (!value.isEmpty()) {
+            result.add(value);
+        }
+
+        return result;
     }
 
     public Program getCurrentProgram() {
