@@ -6,10 +6,10 @@ import ghidra.program.model.data.BuiltInDataTypeManager;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.Structure;
 import ghidra.util.Msg;
 
 import java.util.Iterator;
-import java.util.Optional;
 
 /**
  * Utility class for data type resolution and lookup
@@ -129,6 +129,27 @@ public class DataTypeUtils {
             // For case-insensitive, we want an exact match except for case
             if (dt.getName().equalsIgnoreCase(name)) {
                 return dt;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find a structure by name in the data type manager.
+     *
+     * @param dtm  The data type manager
+     * @param name The structure name to find
+     * @return The Structure if found, null otherwise
+     */
+    public static Structure findStructure(DataTypeManager dtm, String name) {
+        if (dtm == null || name == null || name.isEmpty()) {
+            return null;
+        }
+        Iterator<DataType> allTypes = dtm.getAllDataTypes();
+        while (allTypes.hasNext()) {
+            DataType dt = allTypes.next();
+            if (dt instanceof Structure && dt.getName().equals(name)) {
+                return (Structure) dt;
             }
         }
         return null;

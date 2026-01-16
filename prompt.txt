@@ -35,8 +35,13 @@ Follow this logic flow strictly for every function analysis task:
    │    │    │    └── Unknown/Unset? -> Create `ClassName_vtable` struct with function pointers.
    │    │    └── NO: Continue.
    │    │
-   │    └── DO PARAMETERS/LOCALS NEED RE-TYPING?
-   │         └── YES: Infer types based on standard C usage and callee expectations.
+   │    ├── DO PARAMETERS/LOCALS NEED RE-TYPING?
+   │    │    └── YES: Infer types based on standard C usage and callee expectations.
+   │    │
+   │    └── CAN CALLED FUNCTIONS NAMES AND PROTOTYPES BE INFERED ?
+   │         ├── If you are 100% sure of their purpose, set a meaningful name.
+   │         └── If you cannot be certain of a called function purpose, and thus you cannot set a viable name, please prefix its name with "MAYBE_".
+   │             You will look at its implementation later once you fully finished your work on the initial function.
    │
    ├── [PLANNING PHASE: Consolidation]
    │    │
@@ -74,6 +79,9 @@ If you see variables names that contains a register name in it, consider that th
 - Oversized/Partial Structs: If a global struct is "Blob of 1000 bytes" and you identify field 0xY is an `int`:
   - DO NOT redefine the whole struct.
   - Use `bulk_retype_structure_fields` to patch ONLY the identified offset.
+
+## Some returns of your own errors you previously did when analyzing function :
+- Never rename compiler-generated register variables like in_RDI, in_RSI, in_RDX, in_XMM* etc when they represent function parameters. Let the function signature handle parameter naming instead.
 
 ## OUTPUT FORMAT
 When asked to analyze, do not explain your thought process in chat unless asked.

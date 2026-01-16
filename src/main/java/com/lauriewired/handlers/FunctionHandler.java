@@ -1,6 +1,8 @@
 package com.lauriewired.handlers;
 
+import com.lauriewired.util.DataTypeUtils;
 import com.lauriewired.util.HttpUtils;
+import com.lauriewired.util.StringUtils;
 import com.lauriewired.util.ThreadUtils;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -15,7 +17,6 @@ import ghidra.program.util.ProgramLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 
-import javax.swing.SwingUtilities;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,9 +29,44 @@ public class FunctionHandler {
     private final ProgramProvider programProvider;
     private final PluginTool tool;
 
+    /**
+     * Cache for decompilation results to support diff comparison.
+     * Key: normalized address (lowercase with 0x prefix)
+     * Value: String containing C code
+     */
+    private final Map<String, String> decompilationCache = new HashMap<>();
+
     public FunctionHandler(ProgramProvider programProvider) {
         this.programProvider = programProvider;
         this.tool = programProvider.getTool();
+    }
+
+    /**
+     * Normalize an address string for consistent cache keys.
+     */
+    private String normalizeAddress(String address) {
+        if (address == null) return null;
+        String addr = address.trim().toLowerCase();
+        if (!addr.startsWith("0x")) {
+            addr = "0x" + addr;
+        }
+        return addr;
+    }
+
+    /**
+     * Update the C code cache for a function address.
+     */
+    private void updateCCodeCache(String address, String cCode) {
+        String key = normalizeAddress(address);
+        if (key == null) return;
+        decompilationCache.put(key, cCode);
+    }
+
+    /**
+     * Get cached decompilation entry for an address.
+     */
+    private String getCachedCCode(String address) {
+        return decompilationCache.get(normalizeAddress(address));
     }
 
     /**
@@ -80,7 +116,8 @@ public class FunctionHandler {
     }
 
     /**
-     * Decompile a function at the given address
+     * Decompile a function at the given address.
+     * The result is cached for later diff comparison.
      */
     public String decompileFunctionByAddress(String addressStr) {
         Program program = programProvider.getCurrentProgram();
@@ -96,9 +133,14 @@ public class FunctionHandler {
             decomp.openProgram(program);
             DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
 
-            return (result != null && result.decompileCompleted())
-                    ? formatDecompilationResult(func, result.getDecompiledFunction().getC())
-                    : "Decompilation failed";
+            if (result != null && result.decompileCompleted()) {
+                String output = formatDecompilationResult(func, result.getDecompiledFunction().getC());
+                // Cache the result using the function's entry point address
+                updateCCodeCache(func.getEntryPoint().toString(), output);
+                return output;
+            } else {
+                return "Decompilation failed";
+            }
         } catch (Exception e) {
             return "Error decompiling function: " + e.getMessage();
         }
@@ -106,16 +148,21 @@ public class FunctionHandler {
 
     /**
      * Decompile a function with full context including type definitions and called functions.
+     * The result is cached for later diff comparison.
      */
     public String decompileFunctionWithContext(String addressStr) {
         Program program = programProvider.getCurrentProgram();
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
+        String entryPointAddr = null; // Will store for caching
+
         try {
             Address addr = program.getAddressFactory().getAddress(addressStr);
             Function func = getFunctionForAddress(program, addr);
             if (func == null) return "No function found at or containing address " + addressStr;
+
+            entryPointAddr = func.getEntryPoint().toString();
 
             DecompInterface decomp = new DecompInterface();
             decomp.openProgram(program);
@@ -135,7 +182,6 @@ public class FunctionHandler {
             sb.append("// ============================================================\n");
             sb.append("// Function: ").append(func.getName()).append("\n");
             sb.append("// Address: ").append(func.getEntryPoint()).append("\n");
-            sb.append("// Signature: ").append(func.getSignature().getPrototypeString()).append("\n");
             sb.append("// Body: ").append(func.getBody().getMinAddress())
                     .append(" - ").append(func.getBody().getMaxAddress()).append("\n");
             sb.append("// ============================================================\n\n");
@@ -245,7 +291,12 @@ public class FunctionHandler {
                 }
             }
 
-            return sb.toString();
+            String output = sb.toString();
+            // Cache the result
+            if (entryPointAddr != null) {
+                updateCCodeCache(entryPointAddr, output);
+            }
+            return output;
         } catch (Exception e) {
             return "Error decompiling function with context: " + e.getMessage();
         }
@@ -384,7 +435,8 @@ public class FunctionHandler {
     }
 
     /**
-     * Get assembly code for a function
+     * Get assembly code for a function.
+     * The result is cached for later diff comparison.
      */
     public String disassembleFunction(String addressStr) {
         Program program = programProvider.getCurrentProgram();
@@ -415,7 +467,6 @@ public class FunctionHandler {
                         instr.toString(),
                         comment));
             }
-
 
             return result.toString();
         } catch (Exception e) {
@@ -519,7 +570,6 @@ public class FunctionHandler {
         sb.append("// ============================================================\n");
         sb.append("// Function: ").append(func.getName()).append("\n");
         sb.append("// Address: ").append(func.getEntryPoint()).append("\n");
-        sb.append("// Signature: ").append(func.getSignature().getPrototypeString()).append("\n");
         sb.append("// Body: ").append(func.getBody().getMinAddress())
                 .append(" - ").append(func.getBody().getMaxAddress()).append("\n");
         sb.append("// ============================================================\n\n");
@@ -813,7 +863,6 @@ public class FunctionHandler {
      */
     private String processStructureDefinition(Program program, Map<String, Object> structDef,
                                               DataTypeHandler dataTypeHandler) {
-        Msg.info(this, "Processing structure definition: " + structDef);
         String name = (String) structDef.get("name");
         if (name == null || name.isEmpty()) {
             return "SKIP: Structure name is required";
@@ -828,7 +877,7 @@ public class FunctionHandler {
         DataTypeManager dtm = program.getDataTypeManager();
 
         // Check if structure exists
-        Structure existing = findStructure(dtm, name);
+        Structure existing = DataTypeUtils.findStructure(dtm, name);
         if (existing != null) {
             // Update existing structure with new fields
             if (fields != null && !fields.isEmpty()) {
@@ -1012,18 +1061,128 @@ public class FunctionHandler {
         return result.toString();
     }
 
+    // ============================================================================
+    // BULK OPERATIONS FOR SIGNATURES AND DIFF
+    // ============================================================================
+
     /**
-     * Find a structure by name in the data type manager
+     * Get function signatures for multiple addresses.
+     * This is a lightweight way to get just signatures without full decompilation.
+     *
+     * @param addresses List of function addresses
+     * @return Formatted string with signatures for each address
      */
-    private Structure findStructure(DataTypeManager dtm, String name) {
-        Iterator<DataType> allTypes = dtm.getAllDataTypes();
-        while (allTypes.hasNext()) {
-            DataType dt = allTypes.next();
-            if (dt instanceof Structure && dt.getName().equals(name)) {
-                return (Structure) dt;
+    public String bulkGetSignatures(List<String> addresses) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addresses == null || addresses.isEmpty()) return "Address list is required";
+
+        StringBuilder result = new StringBuilder();
+
+        for (String addressStr : addresses) {
+            String addr = addressStr.trim();
+            result.append("=== ").append(addr).append(" ===\n");
+
+            try {
+                Address address = program.getAddressFactory().getAddress(addr);
+                Function func = getFunctionForAddress(program, address);
+
+                if (func == null) {
+                    result.append("No function found at address\n");
+                } else {
+                    result.append("Address: ").append(addr).append("\n");
+                }
+            } catch (Exception e) {
+                result.append("Error: ").append(e.getMessage()).append("\n");
             }
+            result.append("\n");
         }
-        return null;
+
+        return result.toString();
     }
+
+    /**
+     * Get the diff between cached and current decompilation for multiple functions.
+     * Compares previously cached decompilation with fresh decompilation from Ghidra.
+     *
+     * @param addresses    List of function addresses to diff
+     * @param contextLines Number of context lines around changes (default 3)
+     * @return Unified diff output for each function
+     */
+    public String bulkGetDecompilationDiff(List<String> addresses, int contextLines) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addresses == null || addresses.isEmpty()) return "Address list is required";
+        if (contextLines < 0) contextLines = 3;
+
+        StringBuilder result = new StringBuilder();
+
+        for (String addressStr : addresses) {
+            String normalizedAddr = normalizeAddress(addressStr);
+            result.append("=== Diff for ").append(normalizedAddr).append(" ===\n");
+
+            String cached = getCachedCCode(addressStr);
+
+            try {
+                // C code diff (default)
+                // Get fresh decompilation without using cache
+                String currentCCode = decompileFunctionFresh(addressStr);
+
+                if (cached == null) {
+                    // Cache the current one for future diffs
+                    updateCCodeCache(addressStr, currentCCode);
+                    result.append("(No cached version - caching current decompilation for future diffs)\n\n");
+                    continue;
+                }
+
+                // Generate diff
+                String diff = StringUtils.getDiff(cached, currentCCode, contextLines);
+                if (diff.isEmpty()) {
+                    result.append("(No changes)\n");
+                } else if (diff.length() > currentCCode.length()) {
+                    // Diff is larger than just showing the code, so show the code instead
+                    result.append(String.format("Diff output is longer than just returning the current function code.\nCurrent decompiled code of function @ %s :\n", addressStr));
+                    result.append(currentCCode);
+                } else {
+                    result.append(diff);
+                }
+
+                // Update cache with current version
+                updateCCodeCache(addressStr, currentCCode);
+            } catch (Exception e) {
+                result.append("Error: ").append(e.getMessage()).append("\n");
+            }
+            result.append("\n");
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * Decompile a function without updating the cache (for diff comparison).
+     */
+    private String decompileFunctionFresh(String addressStr) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Function func = getFunctionForAddress(program, addr);
+            if (func == null) return "No function found at address " + addressStr;
+
+            DecompInterface decomp = new DecompInterface();
+            decomp.openProgram(program);
+            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+
+            if (result != null && result.decompileCompleted()) {
+                return formatDecompilationResult(func, result.getDecompiledFunction().getC());
+            } else {
+                return "Decompilation failed";
+            }
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
 
 }

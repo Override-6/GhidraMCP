@@ -1,5 +1,6 @@
 package com.lauriewired;
 
+import com.lauriewired.util.StringUtils;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -14,20 +15,19 @@ import com.sun.net.httpserver.HttpServer;
 
 import com.lauriewired.handlers.*;
 import com.lauriewired.util.HttpUtils;
+import com.lauriewired.util.JsonUtils;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 @PluginInfo(
-    status = PluginStatus.RELEASED,
-    packageName = ghidra.app.DeveloperPluginPackage.NAME,
-    category = PluginCategoryNames.ANALYSIS,
-    shortDescription = "HTTP server plugin",
-    description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options."
+        status = PluginStatus.RELEASED,
+        packageName = ghidra.app.DeveloperPluginPackage.NAME,
+        category = PluginCategoryNames.ANALYSIS,
+        shortDescription = "HTTP server plugin",
+        description = "Starts an embedded HTTP server to expose program data. Port configurable via Tool Options."
 )
 public class GhidraMCPPlugin extends Plugin {
 
@@ -55,9 +55,9 @@ public class GhidraMCPPlugin extends Plugin {
         // Register the configuration option
         Options options = tool.getOptions(OPTION_CATEGORY_NAME);
         options.registerOption(PORT_OPTION_NAME, DEFAULT_PORT,
-            null,
-            "The network port number the embedded HTTP server will listen on. " +
-            "Requires Ghidra restart or plugin reload to take effect after changing.");
+                null,
+                "The network port number the embedded HTTP server will listen on. " +
+                        "Requires Ghidra restart or plugin reload to take effect after changing.");
 
         try {
             startServer();
@@ -198,7 +198,7 @@ public class GhidraMCPPlugin extends Plugin {
     private void registerFunctionEndpoints() {
         // Decompile by name
         server.createContext("/decompile", exchange -> {
-            String name = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            String name = HttpUtils.readRequestBody(exchange);
             HttpUtils.sendResponse(exchange, functionHandler.decompileFunctionByName(name));
         });
 
@@ -242,8 +242,8 @@ public class GhidraMCPPlugin extends Plugin {
 
         // Commit function analysis (unified endpoint)
         server.createContext("/commit_function_analysis", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            Map<String, Object> payload = parseJsonObjectDeep(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            Map<String, Object> payload = JsonUtils.parseJsonObjectDeep(body);
             HttpUtils.sendResponse(exchange, functionHandler.commitFunctionAnalysis(payload, dataTypeHandler, variableHandler));
         });
     }
@@ -370,7 +370,7 @@ public class GhidraMCPPlugin extends Plugin {
             String categoryPath = params.get("category_path");
             int size = HttpUtils.parseIntOrDefault(params.get("size"), 0);
             String fieldsJson = params.get("fields");
-            List<Map<String, String>> fields = parseJsonArray(fieldsJson);
+            List<Map<String, String>> fields = JsonUtils.parseJsonArray(fieldsJson);
             HttpUtils.sendResponse(exchange, dataTypeHandler.createStructureWithFields(name, categoryPath, size, fields));
         });
 
@@ -390,7 +390,7 @@ public class GhidraMCPPlugin extends Plugin {
             String categoryPath = params.get("category_path");
             int size = HttpUtils.parseIntOrDefault(params.get("size"), 4);
             String valuesJson = params.get("values");
-            List<Map<String, String>> values = parseJsonArray(valuesJson);
+            List<Map<String, String>> values = JsonUtils.parseJsonArray(valuesJson);
             HttpUtils.sendResponse(exchange, dataTypeHandler.createEnumWithValues(name, categoryPath, size, values));
         });
 
@@ -429,8 +429,8 @@ public class GhidraMCPPlugin extends Plugin {
             String paramTypesJson = params.get("parameter_types");
             String paramNamesJson = params.get("parameter_names");
 
-            List<String> paramTypes = parseJsonStringArray(paramTypesJson);
-            List<String> paramNames = parseJsonStringArray(paramNamesJson);
+            List<String> paramTypes = JsonUtils.parseJsonStringArray(paramTypesJson);
+            List<String> paramNames = JsonUtils.parseJsonStringArray(paramNamesJson);
 
             HttpUtils.sendResponse(exchange, dataTypeHandler.createFunctionDefinition(
                     name, returnType, paramTypes, paramNames, categoryPath));
@@ -448,15 +448,15 @@ public class GhidraMCPPlugin extends Plugin {
     private void registerBulkEndpoints() {
         // Bulk rename functions
         server.createContext("/bulk_rename_functions", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> renames = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> renames = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, functionHandler.bulkRenameFunctions(renames));
         });
 
         // Bulk set function prototypes
         server.createContext("/bulk_set_function_prototypes", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> prototypes = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> prototypes = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, functionHandler.bulkSetFunctionPrototypes(prototypes));
         });
 
@@ -465,7 +465,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = HttpUtils.parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String renamesJson = params.get("renames");
-            List<Map<String, String>> renames = parseJsonArray(renamesJson);
+            List<Map<String, String>> renames = JsonUtils.parseJsonArray(renamesJson);
             HttpUtils.sendResponse(exchange, variableHandler.bulkRenameVariables(functionAddress, renames));
         });
 
@@ -474,7 +474,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = HttpUtils.parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String typesJson = params.get("type_changes");
-            List<Map<String, String>> typeChanges = parseJsonArray(typesJson);
+            List<Map<String, String>> typeChanges = JsonUtils.parseJsonArray(typesJson);
             HttpUtils.sendResponse(exchange, variableHandler.bulkSetVariableTypes(functionAddress, typeChanges));
         });
 
@@ -483,7 +483,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = HttpUtils.parsePostParams(exchange);
             String structName = params.get("structure_name");
             String renamesJson = params.get("renames");
-            List<Map<String, String>> renames = parseJsonArray(renamesJson);
+            List<Map<String, String>> renames = JsonUtils.parseJsonArray(renamesJson);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkRenameStructureFields(structName, renames));
         });
 
@@ -492,7 +492,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = HttpUtils.parsePostParams(exchange);
             String structName = params.get("structure_name");
             String retypesJson = params.get("retypes");
-            List<Map<String, String>> retypes = parseJsonArray(retypesJson);
+            List<Map<String, String>> retypes = JsonUtils.parseJsonArray(retypesJson);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkRetypeStructureFields(structName, retypes));
         });
 
@@ -501,60 +501,78 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = HttpUtils.parsePostParams(exchange);
             String structName = params.get("structure_name");
             String fieldsJson = params.get("fields");
-            List<Map<String, String>> fields = parseJsonArray(fieldsJson);
+            List<Map<String, String>> fields = JsonUtils.parseJsonArray(fieldsJson);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkUpdateStructureFields(structName, fields));
         });
 
         // Bulk get xrefs
         server.createContext("/bulk_get_xrefs", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            Map<String, Object> payload = parseJsonObjectDeep(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            Map<String, Object> payload = JsonUtils.parseJsonObjectDeep(body);
             @SuppressWarnings("unchecked")
-            List<Map<String, String>> addresses = (List<Map<String, String>>)(List<?>) payload.get("addresses");
+            List<Map<String, String>> addresses = (List<Map<String, String>>) (List<?>) payload.get("addresses");
             int limit = payload.containsKey("limit") ? ((Number) payload.get("limit")).intValue() : 100;
             HttpUtils.sendResponse(exchange, referenceHandler.bulkGetXrefs(addresses, limit));
         });
 
         // Bulk rename data
         server.createContext("/bulk_rename_data", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> renames = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> renames = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, variableHandler.bulkRenameData(renames));
         });
 
         // Bulk resize structures
         server.createContext("/bulk_resize_structures", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> resizes = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> resizes = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkResizeStructures(resizes));
         });
 
         // Bulk get structures
         server.createContext("/bulk_get_structures", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<String> names = parseJsonStringArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<String> names = JsonUtils.parseJsonStringArray(body);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkGetStructures(names));
         });
 
         // Bulk add enum values
         server.createContext("/bulk_add_enum_values", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> values = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> values = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkAddEnumValues(values));
         });
 
         // Bulk create typedefs
         server.createContext("/bulk_create_typedefs", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> typedefs = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> typedefs = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, dataTypeHandler.bulkCreateTypedefs(typedefs));
         });
 
         // Bulk set comments
         server.createContext("/bulk_set_comments", exchange -> {
-            String body = new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            List<Map<String, String>> comments = parseJsonArray(body);
+            String body = HttpUtils.readRequestBody(exchange);
+            List<Map<String, String>> comments = JsonUtils.parseJsonArray(body);
             HttpUtils.sendResponse(exchange, commentHandler.bulkSetComments(comments));
+        });
+
+        server.createContext("/bulk_function_diff", exchange -> {
+            try {
+                String body = HttpUtils.readRequestBody(exchange);
+                Map<String, Object> payload = JsonUtils.parseJsonObjectDeep(body);
+                List<String> addresses = (List<String>) payload.get("addresses");
+                int context_lines = StringUtils.parseInt((String) payload.getOrDefault("context_lines", "0"));
+                HttpUtils.sendResponse(exchange, functionHandler.bulkGetDecompilationDiff(addresses, context_lines));
+            } catch (Throwable e) {
+                Msg.error(this, "error", e);
+            };
+        });
+
+        server.createContext("/bulk_get_signatures", exchange -> {
+            String body = HttpUtils.readRequestBody(exchange);
+            List<String> addresses = JsonUtils.parseJsonStringArray(body);
+            HttpUtils.sendResponse(exchange, functionHandler.bulkGetSignatures(addresses));
         });
     }
 
@@ -602,361 +620,6 @@ public class GhidraMCPPlugin extends Plugin {
                 HttpUtils.sendResponse(exchange, "Redo failed: " + e.getMessage());
             }
         });
-    }
-
-    /**
-     * Simple JSON array parser for bulk operations.
-     * Expects format: [{"key1":"val1","key2":"val2"},{"key1":"val3","key2":"val4"}]
-     */
-    private List<Map<String, String>> parseJsonArray(String json) {
-        List<Map<String, String>> result = new ArrayList<>();
-        if (json == null || json.isEmpty()) return result;
-
-        // Remove whitespace and outer brackets
-        json = json.trim();
-        if (json.startsWith("[")) json = json.substring(1);
-        if (json.endsWith("]")) json = json.substring(0, json.length() - 1);
-
-        if (json.isEmpty()) return result;
-
-        // Split by },{ to get individual objects
-        int braceDepth = 0;
-        int start = 0;
-        for (int i = 0; i < json.length(); i++) {
-            char c = json.charAt(i);
-            if (c == '{') braceDepth++;
-            else if (c == '}') {
-                braceDepth--;
-                if (braceDepth == 0) {
-                    String objStr = json.substring(start, i + 1).trim();
-                    Map<String, String> obj = parseJsonObject(objStr);
-                    if (!obj.isEmpty()) result.add(obj);
-                    start = i + 1;
-                    // Skip comma
-                    while (start < json.length() && (json.charAt(start) == ',' || json.charAt(start) == ' ')) {
-                        start++;
-                    }
-                }
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * Simple JSON object parser.
-     * Expects format: {"key1":"val1","key2":"val2"}
-     */
-    private Map<String, String> parseJsonObject(String json) {
-        Map<String, String> result = new HashMap<>();
-        if (json == null || json.isEmpty()) return result;
-
-        // Remove outer braces
-        json = json.trim();
-        if (json.startsWith("{")) json = json.substring(1);
-        if (json.endsWith("}")) json = json.substring(0, json.length() - 1);
-
-        // Parse key-value pairs
-        boolean inQuotes = false;
-        boolean inKey = true;
-        StringBuilder key = new StringBuilder();
-        StringBuilder value = new StringBuilder();
-
-        for (int i = 0; i < json.length(); i++) {
-            char c = json.charAt(i);
-
-            if (c == '"') {
-                inQuotes = !inQuotes;
-                continue;
-            }
-
-            if (!inQuotes) {
-                if (c == ':') {
-                    inKey = false;
-                    continue;
-                }
-                if (c == ',') {
-                    if (key.length() > 0) {
-                        result.put(key.toString().trim(), value.toString().trim());
-                    }
-                    key = new StringBuilder();
-                    value = new StringBuilder();
-                    inKey = true;
-                    continue;
-                }
-                if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
-            }
-
-            if (inKey) {
-                key.append(c);
-            } else {
-                value.append(c);
-            }
-        }
-
-        // Don't forget the last pair
-        if (key.length() > 0) {
-            result.put(key.toString().trim(), value.toString().trim());
-        }
-
-        return result;
-    }
-
-    /**
-     * Deep JSON object parser that supports nested objects and arrays.
-     * Used for commit_function_analysis endpoint.
-     */
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> parseJsonObjectDeep(String json) {
-        Map<String, Object> result = new HashMap<>();
-        if (json == null || json.isEmpty()) return result;
-
-        json = json.trim();
-        if (json.startsWith("{")) json = json.substring(1);
-        if (json.endsWith("}")) json = json.substring(0, json.length() - 1);
-
-        int i = 0;
-        while (i < json.length()) {
-            // Skip whitespace
-            while (i < json.length() && Character.isWhitespace(json.charAt(i))) i++;
-            if (i >= json.length()) break;
-
-            // Parse key
-            if (json.charAt(i) != '"') {
-                i++;
-                continue;
-            }
-            i++; // skip opening quote
-            StringBuilder key = new StringBuilder();
-            while (i < json.length() && json.charAt(i) != '"') {
-                key.append(json.charAt(i++));
-            }
-            i++; // skip closing quote
-
-            // Skip to colon
-            while (i < json.length() && json.charAt(i) != ':') i++;
-            i++; // skip colon
-
-            // Skip whitespace
-            while (i < json.length() && Character.isWhitespace(json.charAt(i))) i++;
-            if (i >= json.length()) break;
-
-            // Parse value
-            char valStart = json.charAt(i);
-            Object value;
-
-            if (valStart == '"') {
-                // String value
-                i++; // skip opening quote
-                StringBuilder sb = new StringBuilder();
-                while (i < json.length() && json.charAt(i) != '"') {
-                    if (json.charAt(i) == '\\' && i + 1 < json.length()) {
-                        i++; // skip backslash
-                    }
-                    sb.append(json.charAt(i++));
-                }
-                i++; // skip closing quote
-                value = sb.toString();
-            } else if (valStart == '[') {
-                // Array value
-                int depth = 1;
-                int start = i;
-                i++;
-                while (i < json.length() && depth > 0) {
-                    if (json.charAt(i) == '[') depth++;
-                    else if (json.charAt(i) == ']') depth--;
-                    i++;
-                }
-                String arrayStr = json.substring(start, i);
-                value = parseJsonArrayDeep(arrayStr);
-            } else if (valStart == '{') {
-                // Nested object
-                int depth = 1;
-                int start = i;
-                i++;
-                while (i < json.length() && depth > 0) {
-                    if (json.charAt(i) == '{') depth++;
-                    else if (json.charAt(i) == '}') depth--;
-                    i++;
-                }
-                String objStr = json.substring(start, i);
-                value = parseJsonObjectDeep(objStr);
-            } else if (Character.isDigit(valStart) || valStart == '-') {
-                // Number
-                StringBuilder sb = new StringBuilder();
-                while (i < json.length() && (Character.isDigit(json.charAt(i)) || json.charAt(i) == '.' || json.charAt(i) == '-')) {
-                    sb.append(json.charAt(i++));
-                }
-                String numStr = sb.toString();
-                if (numStr.contains(".")) {
-                    value = Double.parseDouble(numStr);
-                } else {
-                    value = Long.parseLong(numStr);
-                }
-            } else if (json.substring(i).startsWith("true")) {
-                value = true;
-                i += 4;
-            } else if (json.substring(i).startsWith("false")) {
-                value = false;
-                i += 5;
-            } else if (json.substring(i).startsWith("null")) {
-                value = null;
-                i += 4;
-            } else {
-                i++;
-                continue;
-            }
-
-            result.put(key.toString(), value);
-
-            // Skip to next comma or end
-            while (i < json.length() && json.charAt(i) != ',' && json.charAt(i) != '}') i++;
-            if (i < json.length() && json.charAt(i) == ',') i++;
-        }
-
-        return result;
-    }
-
-    /**
-     * Parse a JSON array deeply (supports nested objects and arrays)
-     */
-    @SuppressWarnings("unchecked")
-    private List<Object> parseJsonArrayDeep(String json) {
-        List<Object> result = new ArrayList<>();
-        if (json == null || json.isEmpty()) return result;
-
-        json = json.trim();
-        if (json.startsWith("[")) json = json.substring(1);
-        if (json.endsWith("]")) json = json.substring(0, json.length() - 1);
-
-        int i = 0;
-        while (i < json.length()) {
-            // Skip whitespace
-            while (i < json.length() && Character.isWhitespace(json.charAt(i))) i++;
-            if (i >= json.length()) break;
-
-            char valStart = json.charAt(i);
-            Object value;
-
-            if (valStart == '"') {
-                // String value
-                i++;
-                StringBuilder sb = new StringBuilder();
-                while (i < json.length() && json.charAt(i) != '"') {
-                    if (json.charAt(i) == '\\' && i + 1 < json.length()) {
-                        i++;
-                    }
-                    sb.append(json.charAt(i++));
-                }
-                i++;
-                value = sb.toString();
-            } else if (valStart == '[') {
-                // Nested array
-                int depth = 1;
-                int start = i;
-                i++;
-                while (i < json.length() && depth > 0) {
-                    if (json.charAt(i) == '[') depth++;
-                    else if (json.charAt(i) == ']') depth--;
-                    i++;
-                }
-                value = parseJsonArrayDeep(json.substring(start, i));
-            } else if (valStart == '{') {
-                // Object
-                int depth = 1;
-                int start = i;
-                i++;
-                while (i < json.length() && depth > 0) {
-                    if (json.charAt(i) == '{') depth++;
-                    else if (json.charAt(i) == '}') depth--;
-                    i++;
-                }
-                value = parseJsonObjectDeep(json.substring(start, i));
-            } else if (Character.isDigit(valStart) || valStart == '-') {
-                // Number
-                StringBuilder sb = new StringBuilder();
-                while (i < json.length() && (Character.isDigit(json.charAt(i)) || json.charAt(i) == '.' || json.charAt(i) == '-')) {
-                    sb.append(json.charAt(i++));
-                }
-                String numStr = sb.toString();
-                if (numStr.contains(".")) {
-                    value = Double.parseDouble(numStr);
-                } else {
-                    value = Long.parseLong(numStr);
-                }
-            } else if (json.substring(i).startsWith("true")) {
-                value = true;
-                i += 4;
-            } else if (json.substring(i).startsWith("false")) {
-                value = false;
-                i += 5;
-            } else if (json.substring(i).startsWith("null")) {
-                value = null;
-                i += 4;
-            } else {
-                i++;
-                continue;
-            }
-
-            result.add(value);
-
-            // Skip to next comma or end
-            while (i < json.length() && json.charAt(i) != ',' && json.charAt(i) != ']') i++;
-            if (i < json.length() && json.charAt(i) == ',') i++;
-        }
-
-        return result;
-    }
-
-    /**
-     * Simple JSON string array parser.
-     * Expects format: ["val1","val2","val3"]
-     */
-    private List<String> parseJsonStringArray(String json) {
-        List<String> result = new ArrayList<>();
-        if (json == null || json.isEmpty()) return result;
-
-        // Remove whitespace and outer brackets
-        json = json.trim();
-        if (json.startsWith("[")) json = json.substring(1);
-        if (json.endsWith("]")) json = json.substring(0, json.length() - 1);
-
-        if (json.isEmpty()) return result;
-
-        // Parse string values
-        boolean inQuotes = false;
-        StringBuilder current = new StringBuilder();
-
-        for (int i = 0; i < json.length(); i++) {
-            char c = json.charAt(i);
-
-            if (c == '"') {
-                inQuotes = !inQuotes;
-                continue;
-            }
-
-            if (!inQuotes) {
-                if (c == ',') {
-                    String value = current.toString().trim();
-                    if (!value.isEmpty()) {
-                        result.add(value);
-                    }
-                    current = new StringBuilder();
-                    continue;
-                }
-                if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
-            }
-
-            current.append(c);
-        }
-
-        // Don't forget the last value
-        String value = current.toString().trim();
-        if (!value.isEmpty()) {
-            result.add(value);
-        }
-
-        return result;
     }
 
     public Program getCurrentProgram() {

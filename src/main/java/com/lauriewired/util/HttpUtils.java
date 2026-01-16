@@ -82,10 +82,17 @@ public class HttpUtils {
     public static int parseIntOrDefault(String val, int defaultValue) {
         if (val == null) return defaultValue;
         try {
-            return Integer.parseInt(val);
+            return StringUtils.parseInt(val);
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Read request body as UTF-8 string.
+     */
+    public static String readRequestBody(HttpExchange exchange) throws IOException {
+        return new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
     }
 
     /**

@@ -1,5 +1,12 @@
 package com.lauriewired.util;
 
+import com.github.difflib.DiffUtils;
+import com.github.difflib.UnifiedDiffUtils;
+import com.github.difflib.patch.Patch;
+
+import java.util.Arrays;
+import java.util.List;
+
 /**
  * Utility class for string manipulation operations
  */
@@ -44,5 +51,44 @@ public class StringUtils {
             }
         }
         return sb.toString();
+    }
+
+    public static int parseInt(String input) {
+        if (input == null) return 0;
+        if (input.startsWith("0x")) {
+            return Integer.parseInt(input.substring(2), 16);
+        }
+        return Integer.parseInt(input);
+    }
+
+
+    /**
+     * Generates a token-efficient diff specifically for LLM consumption.
+     * * @param fileName The name of the file (helps LLM context)
+     *
+     * @param oldStr  The original string
+     * @param newStr  The modified string
+     * @param context Number of unchanged lines to keep around the change
+     * @return A compact Unified Diff string
+     */
+    public static String getDiff(String oldStr, String newStr, int context) {
+        // 1. Split strings into lists (required by the library)
+        List<String> original = Arrays.asList(oldStr.split("\\n"));
+        List<String> revised = Arrays.asList(newStr.split("\\n"));
+
+        // 2. Compute the mathematical difference
+        Patch<String> patch = DiffUtils.diff(original, revised);
+
+        // 3. Generate the Unified Diff format
+        // We use the fileName for both 'original' and 'revised' headers
+        List<String> unifiedDiff = UnifiedDiffUtils.generateUnifiedDiff(
+                null, null, original, patch, context);
+
+        // Remove the first 2 lines (the --- and +++ headers)
+        if (unifiedDiff.size() > 2) {
+            unifiedDiff = unifiedDiff.subList(2, unifiedDiff.size());
+        }
+
+        return String.join("\n", unifiedDiff);
     }
 }

@@ -336,7 +336,7 @@ def decompile_function(name: str) -> str:
     - Full signature
     - Body address range
 
-    Use decompile_function_by_address() if you have the address instead.
+    IMPORTANT: PREFER bulk_decompile_function_diff() IF YOU HAVE THE ADDRESS TO SAVE TOKENS!
 
     Returns: Decompiled C code with metadata header.
     """
@@ -350,6 +350,8 @@ def decompile_function_by_address(address: str) -> str:
 
     The address can be the entry point or any address within the function body.
     Format: hex string like "0x1400010a0" or "1400010a0".
+
+    IMPORTANT: PREFER bulk_decompile_function_diff() IF YOU HAVE THE ADDRESS TO SAVE TOKENS!
 
     Returns the decompiled C code with a header containing:
     - Function name
@@ -386,6 +388,52 @@ def decompile_function_with_context(address: str) -> str:
     Returns: Comprehensive decompilation with full context.
     """
     return "\n".join(safe_get("decompile_function_with_context", {"address": address}))
+
+@mcp.tool()
+def bulk_decompile_function_diff(addresses: list, context_lines: int = 0) -> list:
+    """
+    Decompiles the given functions and returns the difference between their current C representation with their previous ones.
+    This allows you to consume less tokens when you want to verify the results of the actions you performed on functions after their last decompilation.
+    Should be preferred from decompile_function and decompile_function_by_address.
+
+    The goal of this function is to save tokens by avoiding you to have to process the whole function code.
+    However, it is possible that this function still returns the full code for some functions if they had so much diff since last decompile that the diff is actually longer / harder to process than just returning the whole code.
+    This function should always be preferred for verification.
+
+    Args:
+        addresses: Functions addresses in hex string (e.g., ["0x1400010a0", ...])
+        context_lines: (default 0) lines to show before and after each diff for more context.
+
+    Returns: Comprehensive difference between last decompilation and current C code representation.
+
+    """
+    return safe_post_json("bulk_function_diff", {"addresses": addresses, "context_lines": str(context_lines)})
+
+@mcp.tool()
+def bulk_get_functions_signatures_by_address(addresses: list) -> str:
+    """
+    Returns ONLY the function signatures of given function addresses without decompilation.
+    Use case: Quick verification after changes without full decompile cost.
+
+    Args:
+        addresses: Functions addresses in hex string (e.g., ["0x1400010a0", ...])
+
+    Returns: string containing all functions signatures associated with their addresses
+
+    """
+    return safe_post("bulk_get_signatures", json.dumps(addresses))
+
+@mcp.tool()
+def get_function_signature_only(address: str) -> str:
+    """
+    Returns ONLY the function signature without decompilation.
+
+    Returns: "void game_state_update(GameStateManager *mgr, float delta_time)"
+
+    Use case: Quick verification after changes without full decompile cost.
+    Cost: ~50-100 tokens vs 2000+ for full decompile
+    """
+    return bulk_get_functions_signatures_by_address([address])
 
 
 @mcp.tool()
@@ -1091,11 +1139,6 @@ def commit_function_analysis(
     Example usage:
         commit_function_analysis(
             function_address="0x1400010a0",
-            new_signature="int handle_request(Session* session, Request* req)",
-            variable_changes=[
-                {"old_name": "local_10", "new_name": "session", "new_type": "Session*"},
-                {"old_name": "local_18", "new_name": "request", "new_type": "Request*"}
-            ],
             structures=[
                 {
                     "name": "Request",
@@ -1104,6 +1147,11 @@ def commit_function_analysis(
                         {"name": "data", "type": "void*", "offset": "8"}
                     ]
                 }
+            ],
+            new_signature="int handle_request(Session* session, Request* req)",
+            variable_changes=[
+                {"old_name": "local_10", "new_name": "session", "new_type": "Session*"},
+                {"old_name": "local_18", "new_name": "request", "new_type": "Request*"}
             ],
             called_functions=[
                 {"address": "0x140001500", "prototype": "void log_request(Request* req)"}

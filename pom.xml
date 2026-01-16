@@ -11,6 +11,16 @@
   <url>http://maven.apache.org</url>
 
   <dependencies>
+    <dependency>
+      <groupId>io.github.java-diff-utils</groupId>
+      <artifactId>java-diff-utils</artifactId>
+      <version>4.15</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.10.1</version>
+    </dependency>
     <!-- Ghidra JARs as system-scoped dependencies -->
     <dependency>
       <groupId>ghidra</groupId>
@@ -69,18 +79,25 @@
       <systemPath>${project.basedir}/lib/Gui.jar</systemPath>
     </dependency>
 
-    <!-- JUnit (test only) -->
+    <!-- JUnit 5 (test only) -->
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <version>3.8.1</version>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Mockito for mocking Ghidra dependencies -->
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>5.11.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.jetbrains</groupId>
-      <artifactId>annotations</artifactId>
-      <version>RELEASE</version>
-      <scope>compile</scope>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-junit-jupiter</artifactId>
+      <version>5.11.0</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 
@@ -147,8 +164,11 @@
               <goal>copy-dependencies</goal>
             </goals>
             <configuration>
-              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <outputDirectory>${project.build.directory}/dependencies-to-bundle</outputDirectory>
+
               <includeScope>runtime</includeScope>
+
+              <excludeScope>system</excludeScope>
             </configuration>
           </execution>
         </executions>
@@ -157,8 +177,20 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <source>9</source>
-          <target>9</target>
+          <source>16</source>
+          <target>16</target>
+        </configuration>
+      </plugin>
+      <!-- Surefire plugin for JUnit 5 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>
+            --add-opens java.base/java.lang=ALL-UNNAMED
+            --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+          </argLine>
         </configuration>
       </plugin>
     </plugins>

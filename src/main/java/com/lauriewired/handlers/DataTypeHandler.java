@@ -1,13 +1,13 @@
 package com.lauriewired.handlers;
 
 import com.lauriewired.util.DataTypeUtils;
+import com.lauriewired.util.StringUtils;
 import com.lauriewired.util.ThreadUtils;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 
-import javax.swing.SwingUtilities;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -48,7 +48,7 @@ public class DataTypeHandler {
                 int successCount = 0;
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
+                    Structure struct = DataTypeUtils.findStructure(dtm, structureName);
 
                     if (struct == null) {
                         sb.append("Structure not found: ").append(structureName);
@@ -115,7 +115,7 @@ public class DataTypeHandler {
                 int successCount = 0;
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
+                    Structure struct = DataTypeUtils.findStructure(dtm, structureName);
 
                     if (struct == null) {
                         sb.append("Structure not found: ").append(structureName);
@@ -193,7 +193,7 @@ public class DataTypeHandler {
                     DataTypeManager dtm = program.getDataTypeManager();
 
                     // Check if structure already exists
-                    Structure existing = findStructure(dtm, name);
+                    Structure existing = DataTypeUtils.findStructure(dtm, name);
                     if (existing != null) {
                         result.set("Structure already exists: " + existing.getPathName() +
                                 ". Use existing structure or choose a different name.");
@@ -236,25 +236,21 @@ public class DataTypeHandler {
      */
     public String createStructureWithFields(String name, String categoryPath, int size,
                                             List<Map<String, String>> fields) {
-        Msg.info(this, String.format("create new structure %s with fields %s", name, fields));
         Program program = programProvider.getCurrentProgram();
         if (program == null) return "No program loaded";
         if (name == null || name.isEmpty()) return "Structure name is required";
 
         AtomicReference<String> result = new AtomicReference<>("Failed to create structure");
         StringBuilder sb = new StringBuilder();
-        Msg.info(this, "A");
+
         try {
             ThreadUtils.invokeAndWaitSafe(() -> {
-                Msg.info(this, "B");
                 int tx = program.startTransaction("Create structure with fields");
-                Msg.info(this, "Transaction started");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    Msg.info(this, "dtm = " + dtm);
+
                     // Check if structure already exists
-                    Structure existing = findStructure(dtm, name);
-                    Msg.info(this, "existing = " + existing);
+                    Structure existing = DataTypeUtils.findStructure(dtm, name);
                     if (existing != null) {
                         result.set("Structure already exists: " + existing.getPathName() +
                                 ". Use existing structure or choose a different name.");
@@ -266,18 +262,13 @@ public class DataTypeHandler {
                             ? new CategoryPath(categoryPath)
                             : CategoryPath.ROOT;
 
-                    Msg.info(this, "catPath = " + catPath);
-
                     // Create the structure
                     StructureDataType newStruct = new StructureDataType(catPath, name, size, dtm);
-
-                    Msg.info(this, "created new struct");
 
                     // Add fields if provided
                     int fieldSuccessCount = 0;
                     if (fields != null && !fields.isEmpty()) {
                         for (Map<String, String> field : fields) {
-                            Msg.info(this, String.format("adding field %s", field));
                             String fieldName = field.get("name");
                             String fieldTypeName = field.get("type");
                             String offsetStr = field.get("offset");
@@ -297,7 +288,7 @@ public class DataTypeHandler {
                             try {
                                 int fieldSize = fieldType.getLength();
                                 if (offsetStr != null && !offsetStr.isEmpty()) {
-                                    int offset = Integer.parseInt(offsetStr);
+                                    int offset = StringUtils.parseInt(offsetStr);
                                     newStruct.insertAtOffset(offset, fieldType, fieldSize, fieldName, null);
                                 } else {
                                     newStruct.add(fieldType, fieldSize, fieldName, null);
@@ -310,7 +301,7 @@ public class DataTypeHandler {
                             }
                         }
                     }
-                    Msg.info(this, "end of field addition");
+
                     DataType addedType = dtm.addDataType(newStruct, DataTypeConflictHandler.REPLACE_HANDLER);
 
                     // Get final structure to report size
@@ -357,7 +348,7 @@ public class DataTypeHandler {
                 int successCount = 0;
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
+                    Structure struct = DataTypeUtils.findStructure(dtm, structureName);
 
                     if (struct == null) {
                         sb.append("Structure not found: ").append(structureName);
@@ -385,7 +376,7 @@ public class DataTypeHandler {
                         try {
                             int fieldSize = fieldType.getLength();
                             if (offsetStr != null && !offsetStr.isEmpty()) {
-                                int offset = Integer.parseInt(offsetStr);
+                                int offset = StringUtils.parseInt(offsetStr);
                                 // Use replaceAtOffset to update existing or insert new
                                 struct.replaceAtOffset(offset, fieldType, fieldSize, fieldName, null);
                                 sb.append("OK: +0x").append(Integer.toHexString(offset)).append(": ")
@@ -450,13 +441,13 @@ public class DataTypeHandler {
 
                         int newSize;
                         try {
-                            newSize = Integer.parseInt(newSizeStr);
+                            newSize = StringUtils.parseInt(newSizeStr);
                         } catch (NumberFormatException e) {
                             sb.append("SKIP: Invalid size for ").append(structName).append("\n");
                             continue;
                         }
 
-                        Structure struct = findStructure(dtm, structName);
+                        Structure struct = DataTypeUtils.findStructure(dtm, structName);
                         if (struct == null) {
                             sb.append("FAIL: Structure not found: ").append(structName).append("\n");
                             continue;
@@ -510,7 +501,7 @@ public class DataTypeHandler {
         for (String name : names) {
             result.append("=== ").append(name).append(" ===\n");
 
-            Structure struct = findStructure(dtm, name);
+            Structure struct = DataTypeUtils.findStructure(dtm, name);
             if (struct == null) {
                 result.append("NOT FOUND\n\n");
                 continue;
@@ -954,7 +945,7 @@ public class DataTypeHandler {
                 int tx = program.startTransaction("Resize structure");
                 try {
                     DataTypeManager dtm = program.getDataTypeManager();
-                    Structure struct = findStructure(dtm, structureName);
+                    Structure struct = DataTypeUtils.findStructure(dtm, structureName);
 
                     if (struct == null) {
                         result.set("Structure not found: " + structureName);
@@ -1167,21 +1158,47 @@ public class DataTypeHandler {
         return result.get();
     }
 
-    // ============ Helper Methods ============
+    // ============ Structure Retrieval ============
 
     /**
-     * Find a structure by name in the data type manager.
+     * Get details of a structure by name.
+     *
+     * @param structureName The name of the structure to retrieve
+     * @return Structure details or error message
      */
-    private Structure findStructure(DataTypeManager dtm, String name) {
-        Iterator<DataType> allTypes = dtm.getAllDataTypes();
-        while (allTypes.hasNext()) {
-            DataType dt = allTypes.next();
-            if (dt instanceof Structure && dt.getName().equals(name)) {
-                return (Structure) dt;
-            }
+    public String getStructure(String structureName) {
+        Program program = programProvider.getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (structureName == null || structureName.isEmpty()) return "Structure name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        Structure struct = DataTypeUtils.findStructure(dtm, structureName);
+
+        if (struct == null) {
+            return "Structure not found: " + structureName;
         }
-        return null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Structure: ").append(struct.getName()).append("\n");
+        sb.append("Path: ").append(struct.getPathName()).append("\n");
+        sb.append("Size: ").append(struct.getLength()).append(" bytes\n");
+        sb.append("Alignment: ").append(struct.getAlignment()).append("\n");
+        sb.append("Fields:\n");
+
+        for (DataTypeComponent component : struct.getComponents()) {
+            String fieldName = component.getFieldName();
+            if (fieldName == null) fieldName = "(unnamed)";
+            sb.append(String.format("  +0x%x: %s %s (size: %d)\n",
+                    component.getOffset(),
+                    component.getDataType().getName(),
+                    fieldName,
+                    component.getLength()));
+        }
+
+        return sb.toString();
     }
+
+    // ============ Helper Methods ============
 
     /**
      * Find a component in a structure by field name.
